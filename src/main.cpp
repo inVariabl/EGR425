@@ -30,6 +30,7 @@ String cityName;
 double tempNow;
 double tempMin;
 double tempMax;
+bool isCelsius = false;
 
 ////////////////////////////////////////////////////////////////////
 // Method header declarations
@@ -38,6 +39,16 @@ String httpGETRequest(const char* serverName);
 void drawWeatherImage(String iconId, int resizeMult);
 void fetchWeatherDetails();
 void drawWeatherDisplay();
+
+// Function to convert Fahrenheit to Celsius
+double convertFtoC(double fahrenheit) {
+		return (fahrenheit - 32) * 5 / 9;
+}
+
+// Function to convert Celsius to Fahrenheit
+double convertCtoF(double celsius) {
+    return celsius * 9 / 5 + 32;
+}
 
 ///////////////////////////////////////////////////////////////
 // Put your setup code here, to run once
@@ -65,23 +76,26 @@ void setup() {
 // Put your main code here, to run repeatedly
 ///////////////////////////////////////////////////////////////
 void loop() {
+		// Check if button A is pressed to toggle between Fahrenheit and Celsius
+    M5.update();  // Update the button state
+
+    if (M5.BtnA.wasPressed()) {
+				isCelsius = !isCelsius;  // Toggle the unit
+				drawWeatherDisplay(); // Force redraw
+    }
 
     // Only execute every so often
     if ((millis() - lastTime) > timerDelay) {
         if (WiFi.status() == WL_CONNECTED) {
-
             fetchWeatherDetails();
             drawWeatherDisplay();
-
         } else {
             Serial.println("WiFi Disconnected");
         }
-
         // Update the last time to NOW
         lastTime = millis();
     }
 }
-
 
 /////////////////////////////////////////////////////////////////
 // This method fetches the weather details from the OpenWeather
@@ -141,13 +155,19 @@ void fetchWeatherDetails() {
     tempMin = objMain["temp_min"];
     tempMax = objMain["temp_max"];
     Serial.printf("NOW: %.1f F and %s\tMIN: %.1f F\tMax: %.1f F\n", tempNow, strWeatherDesc, tempMin, tempMax);
-}
+
+		}
 
 /////////////////////////////////////////////////////////////////
 // Update the display based on the weather variables defined
 // at the top of the screen.
 /////////////////////////////////////////////////////////////////
 void drawWeatherDisplay() {
+		// Convert temperatures if Celsius is selected
+    double displayTempNow = isCelsius ? convertFtoC(tempNow) : tempNow;
+    double displayTempMin = isCelsius ? convertFtoC(tempMin) : tempMin;
+    double displayTempMax = isCelsius ? convertFtoC(tempMax) : tempMax;
+
     //////////////////////////////////////////////////////////////////
     // Draw background - light blue if day time and navy blue of night
     //////////////////////////////////////////////////////////////////
@@ -175,17 +195,17 @@ void drawWeatherDisplay() {
     M5.Lcd.setCursor(pad, pad);
     M5.Lcd.setTextColor(TFT_BLUE);
     M5.Lcd.setTextSize(3);
-    M5.Lcd.printf("LO:%0.fF\n", tempMin);
+    M5.Lcd.printf("LO:%.1f%s\n", displayTempMin, isCelsius ? "C" : "F");
 
     M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
     M5.Lcd.setTextColor(primaryTextColor);
     M5.Lcd.setTextSize(10);
-    M5.Lcd.printf("%0.fF\n", tempNow);
+    M5.Lcd.printf("%.1f%s\n", displayTempNow, isCelsius ? "C" : "F");
 
     M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
     M5.Lcd.setTextColor(TFT_RED);
     M5.Lcd.setTextSize(3);
-    M5.Lcd.printf("HI:%0.fF\n", tempMax);
+    M5.Lcd.printf("HI:%.1f%s\n", displayTempMax, isCelsius ? "C" : "F");
 
     M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
     M5.Lcd.setTextColor(primaryTextColor);
@@ -271,6 +291,8 @@ void drawWeatherImage(String iconId, int resizeMult) {
         }
     }
 }
+
+
 //////////////////////////////////////////////////////////////////////////////////
 // For more documentation see the following links:
 // https://github.com/m5stack/m5-docs/blob/master/docs/en/api/
