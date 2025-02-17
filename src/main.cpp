@@ -126,14 +126,6 @@ void fetchWeatherDetails() {
     sprintf(buffer, "%02d:%02d:%02d%s", hour12, minute, second, ampm.c_str());
     lastSyncTime = String(buffer);
 
-
-
-
-
-
-
-
-
     //////////////////////////////////////////////////////////////////
     // Hardcode the specific city,state,country into the query
     // Examples: https://api.openweathermap.org/data/2.5/weather?q=riverside,ca,usa&units=imperial&appid=YOUR_API_KEY
@@ -245,10 +237,6 @@ void drawWeatherDisplay() {
     M5.Lcd.setTextSize(2);
     M5.Lcd.setTextColor(primaryTextColor);
     M5.Lcd.printf("Last Sync: %s", lastSyncTime.c_str());
-
-
-
-
 }
 
 /////////////////////////////////////////////////////////////////
