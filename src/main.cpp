@@ -50,7 +50,7 @@ String lastSyncTime = "Not synced";
 // Method header declarations
 ////////////////////////////////////////////////////////////////////
 String httpGETRequest(const char* serverName);
-void drawWeatherImage(String iconId, int resizeMult);
+void drawWeatherImage(String iconId, int resizeMult, int xOffset, int yOffset, int iconWidth, int iconHeight);
 void fetchWeatherDetails();
 void drawWeatherDisplay();
 
@@ -102,7 +102,6 @@ void loop() {
     }
 }
 
-
 /////////////////////////////////////////////////////////////////
 // This method fetches the weather details from the OpenWeather
 // API and saves them into the fields defined above
@@ -130,7 +129,7 @@ void fetchWeatherDetails() {
     // Hardcode the specific city,state,country into the query
     // Examples: https://api.openweathermap.org/data/2.5/weather?q=riverside,ca,usa&units=imperial&appid=YOUR_API_KEY
     //////////////////////////////////////////////////////////////////
-    String serverURL = urlOpenWeather + "q=des+moines,ia,usa&units=imperial&appid=" + apiKey;
+    String serverURL = urlOpenWeather + "q=monrovia,ca,usa&units=imperial&appid=" + apiKey;
     //Serial.println(serverURL); // Debug print
 
     //////////////////////////////////////////////////////////////////
@@ -190,43 +189,57 @@ void drawWeatherDisplay() {
     // Draw background - light blue if day time and navy blue of night
     //////////////////////////////////////////////////////////////////
     uint16_t primaryTextColor;
+    uint16_t backgroundColor;
     if (strWeatherIcon.indexOf("d") >= 0) {
-        M5.Lcd.fillScreen(TFT_CYAN);
+        backgroundColor = TFT_CYAN;
         primaryTextColor = TFT_DARKGREY;
     } else {
-        M5.Lcd.fillScreen(TFT_NAVY);
+        backgroundColor = TFT_NAVY;
         primaryTextColor = TFT_WHITE;
     }
+    M5.Lcd.fillScreen(backgroundColor);
 
     //////////////////////////////////////////////////////////////////
-    // Draw the icon on the right side of the screen - the built in
-    // drawBitmap method works, but we cannot scale up the image
-    // size well, so we'll call our own method
+    // Draw the weather icon on the right side of the screen
     //////////////////////////////////////////////////////////////////
-    //M5.Lcd.drawBitmap(0, 0, 100, 100, myBitmap, TFT_BLACK);
-    drawWeatherImage(strWeatherIcon, 3);
+    int iconSize = 100; // Size of the weather icon
+    int iconX = M5.Lcd.width() - iconSize - 20; // Position icon on the right with some padding
+    int iconY = 20; // Position icon at the top with some padding
+    drawWeatherImage(strWeatherIcon, 3, iconX, iconY, iconSize, iconSize);
 
     //////////////////////////////////////////////////////////////////
     // Draw the temperatures and city name
     //////////////////////////////////////////////////////////////////
-    int pad = 10;
-    M5.Lcd.setCursor(pad, pad);
-    M5.Lcd.setTextColor(TFT_BLUE);
-    M5.Lcd.setTextSize(3);
-    M5.Lcd.printf("LO:%0.fF\n", tempMin);
+    int pad = 20; // Increased padding for better spacing
+    int textX = pad;
+    int textY = pad;
 
-    M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
+    // Draw "LO" temperature
+    M5.Lcd.setCursor(textX, textY);
+    M5.Lcd.setTextColor(TFT_BLUE);
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.printf("LO: %0.fF\n", tempMin);
+
+    // Draw current temperature
+    textY += 30; // Adjust vertical spacing
+    M5.Lcd.setCursor(textX, textY);
     M5.Lcd.setTextColor(primaryTextColor);
-    M5.Lcd.setTextSize(10);
+    M5.Lcd.setTextSize(6); // Larger font size for current temperature
     M5.Lcd.printf("%0.fF\n", tempNow);
 
-    M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
+    // Draw "HI" temperature
+    textY += 70; // Adjust vertical spacing
+    M5.Lcd.setCursor(textX, textY);
     M5.Lcd.setTextColor(TFT_RED);
-    M5.Lcd.setTextSize(3);
-    M5.Lcd.printf("HI:%0.fF\n", tempMax);
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.printf("HI: %0.fF\n", tempMax);
 
-    M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
+    // Draw city name
+    textY += 30; // Adjust vertical spacing
+    M5.Lcd.setCursor(textX, textY);
     M5.Lcd.setTextColor(primaryTextColor);
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextWrap(true); // Enable text wrapping for long city names
     M5.Lcd.printf("%s\n", cityName.c_str());
 
     //    Draw last sync time (added code)
@@ -274,16 +287,9 @@ String httpGETRequest(const char* serverURL) {
 // of the native 100x100 pixels) on the right-hand side of the
 // screen (centered vertically).
 /////////////////////////////////////////////////////////////////
-void drawWeatherImage(String iconId, int resizeMult) {
-
+void drawWeatherImage(String iconId, int resizeMult, int xOffset, int yOffset, int iconWidth, int iconHeight) {
     // Get the corresponding byte array
     const uint16_t * weatherBitmap = getWeatherBitmap(iconId);
-
-    // Compute offsets so that the image is centered vertically and is
-    // right-aligned
-    int yOffset = -(resizeMult * imgSqDim - M5.Lcd.height()) / 2;
-    int xOffset = sWidth - (imgSqDim*resizeMult*.8); // Right align (image doesn't take up entire array)
-    //int xOffset = (M5.Lcd.width() / 2) - (imgSqDim * resizeMult / 2); // center horizontally
 
     // Iterate through each pixel of the imgSqDim x imgSqDim (100 x 100) array
     for (int y = 0; y < imgSqDim; y++) {
