@@ -7,11 +7,12 @@
 ////////////////////////////////////////////////////////////////////
 // Variables
 ////////////////////////////////////////////////////////////////////
-// TODO 3: Register for openweather account and get API key
-String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?";
+String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?"; 
+// https://api.openweathermap.org/data/2.5/weather?zip=91016,us&units=imperial&appid=d4fbab132209f8288d5ee07e27bfa1d2
+
 String apiKey ="d4fbab132209f8288d5ee07e27bfa1d2";
 
-// TODO 1: WiFi variables
+// WiFi variables
 String wifiNetworkName = "CBU-LANCERS";
 String wifiPassword = "L@ncerN@tion";
 
@@ -22,14 +23,27 @@ unsigned long timerDelay = 5000;  // 5000; 5 minutes (300,000ms) or 5 seconds (5
 // LCD variables
 int sWidth;
 int sHeight;
+bool wasTouched = false; // Track if touch was active
+bool touchHandled = false; // Ensure touch is handled only once
 
 // Weather/zip variables
 String strWeatherIcon;
 String strWeatherDesc;
 String cityName;
-double tempNow;
+double tempNowF;
+double tempNowC;
+
 double tempMin;
 double tempMax;
+
+int zipCode = 91016; // default monrovia
+
+// Enum
+enum State { WEATHER, ZIP };
+static State displayState = WEATHER;
+
+// Misc
+bool tp = false;
 
 ////////////////////////////////////////////////////////////////////
 // Method header declarations
@@ -38,10 +52,10 @@ String httpGETRequest(const char* serverName);
 void drawWeatherImage(String iconId, int resizeMult, int xOffset, int yOffset, int iconWidth, int iconHeight);
 void fetchWeatherDetails();
 void drawWeatherDisplay();
+int tempToCelsius(double tempF);
+void drawZipcodeSelectScreen();
 
-///////////////////////////////////////////////////////////////
-// Put your setup code here, to run once
-///////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
 void setup() {
     // Initialize the device
     M5.begin();
@@ -62,18 +76,72 @@ void setup() {
 }
 
 ///////////////////////////////////////////////////////////////
-// Put your main code here, to run repeatedly
-///////////////////////////////////////////////////////////////
 void loop() {
+    M5.update();
 
-    // Only execute every so often
-    if ((millis() - lastTime) > timerDelay) {
-        if (WiFi.status() == WL_CONNECTED) {
+    // switch state on B press
+    if (M5.BtnB.wasPressed()) {
+        Serial.print("B pressed\n");
 
+        // switch to ZIP state
+        if (displayState == WEATHER) { // update timerDelay
+            
+            // draw instantly after press
+            drawZipcodeSelectScreen();
+
+            displayState = ZIP;
+            timerDelay = 1000;
+            tp = false;            
+        } 
+
+        // switch to WEATHER state
+        else {
+
+            // draw instantly after press
             fetchWeatherDetails();
             drawWeatherDisplay();
 
+            displayState = WEATHER;
+            timerDelay = 5000;
+        }
+    }
+
+    // Refresh the ZIP screen when someone presses a button
+    if (displayState == ZIP) {
+        if (M5.Touch.ispressed()) {
+            if (!wasTouched) {
+                wasTouched = true;  // Mark as touched
+                touchHandled = false; // Reset the handled flag
+            }
         } else {
+            if (wasTouched && !touchHandled) {
+                touchHandled = true;  // Prevent multiple triggers
+                Serial.print("Touch detected\n");
+                drawZipcodeSelectScreen();
+            }
+            wasTouched = false; // Reset for next touch
+        }
+    }
+
+    // Slow weather refreesh loop
+    if ((millis() - lastTime) > timerDelay) {
+
+        if (WiFi.status() == WL_CONNECTED) {
+            
+            if (displayState == WEATHER) {
+                fetchWeatherDetails();
+                drawWeatherDisplay();
+            }
+
+            else if (displayState == ZIP) {
+                if (!tp) { 
+                    Serial.print("Selecting ZIP");
+                    tp = true;
+                } else Serial.print(".");
+            }
+        } 
+        
+        else {
             Serial.println("WiFi Disconnected");
         }
 
@@ -91,8 +159,9 @@ void fetchWeatherDetails() {
     // Hardcode the specific city,state,country into the query
     // Examples: https://api.openweathermap.org/data/2.5/weather?q=riverside,ca,usa&units=imperial&appid=YOUR_API_KEY
     //////////////////////////////////////////////////////////////////
-    String serverURL = urlOpenWeather + "q=monrovia,ca,usa&units=imperial&appid=" + apiKey;
-    //Serial.println(serverURL); // Debug print
+
+    // changing zip code
+    String serverURL = urlOpenWeather + "zip=" + zipCode + ",us&units=imperial&appid=" + apiKey;
 
     //////////////////////////////////////////////////////////////////
     // Make GET request and store reponse
@@ -136,10 +205,12 @@ void fetchWeatherDetails() {
 
     // Parse response to get the temperatures
     JsonObject objMain = objResponse["main"];
-    tempNow = objMain["temp"];
+    tempNowF = objMain["temp"];
     tempMin = objMain["temp_min"];
     tempMax = objMain["temp_max"];
-    Serial.printf("NOW: %.1f F and %s\tMIN: %.1f F\tMax: %.1f F\n", tempNow, strWeatherDesc, tempMin, tempMax);
+
+    // Remove the rounding to get actual temperatures
+    Serial.printf("NOW: %f F and %s\tMIN: %f F\tMax: %f F\n", tempNowF, strWeatherDesc, tempMin, tempMax);
 }
 
 /////////////////////////////////////////////////////////////////
@@ -175,26 +246,27 @@ void drawWeatherDisplay() {
     int pad = 20; // Increased padding for better spacing
     int textX = pad;
     int textY = pad;
+    
 
     // Draw "LO" temperature
     M5.Lcd.setCursor(textX, textY);
-    M5.Lcd.setTextColor(TFT_BLUE);
+    M5.Lcd.setTextColor(TFT_RED);
     M5.Lcd.setTextSize(2);
-    M5.Lcd.printf("LO: %0.fF\n", tempMin);
+    M5.Lcd.printf("HI: %0.fF\n", tempMax);
 
     // Draw current temperature
     textY += 30; // Adjust vertical spacing
     M5.Lcd.setCursor(textX, textY);
     M5.Lcd.setTextColor(primaryTextColor);
     M5.Lcd.setTextSize(6); // Larger font size for current temperature
-    M5.Lcd.printf("%0.fF\n", tempNow);
+    M5.Lcd.printf("%0.fF\n", tempNowF);
 
     // Draw "HI" temperature
     textY += 70; // Adjust vertical spacing
     M5.Lcd.setCursor(textX, textY);
-    M5.Lcd.setTextColor(TFT_RED);
+    M5.Lcd.setTextColor(TFT_BLUE);
     M5.Lcd.setTextSize(2);
-    M5.Lcd.printf("HI: %0.fF\n", tempMax);
+    M5.Lcd.printf("LO: %0.fF\n", tempMin);
 
     // Draw city name
     textY += 30; // Adjust vertical spacing
@@ -203,6 +275,33 @@ void drawWeatherDisplay() {
     M5.Lcd.setTextSize(2);
     M5.Lcd.setTextWrap(true); // Enable text wrapping for long city names
     M5.Lcd.printf("%s\n", cityName.c_str());
+}
+
+/////////////////////////////////////////////////////////////////
+// Draw the zipcode selection screen
+/////////////////////////////////////////////////////////////////
+void drawZipcodeSelectScreen() {
+    // Draw background - light blue if day time and navy blue of night
+    uint16_t primaryTextColor = TFT_DARKGREY;
+    uint16_t backgroundColor = TFT_WHITE;
+
+    int padding = 10;
+    int textX = sWidth / 5;
+    int textY = sHeight / 2;
+    int headerX = sWidth - 50;
+    int headerY = 10;
+
+    M5.Lcd.fillScreen(backgroundColor);
+    // Draw the header
+    M5.Lcd.setCursor(headerX, headerY);
+    M5.Lcd.setTextColor(TFT_RED);
+    M5.Lcd.setTextSize(3);
+
+    // Draw the zipcode 
+    M5.Lcd.setCursor(textX, textY);
+    M5.Lcd.setTextColor(primaryTextColor);
+    M5.Lcd.setTextSize(6);
+    M5.Lcd.print(zipCode);
 }
 
 /////////////////////////////////////////////////////////////////
@@ -277,6 +376,7 @@ void drawWeatherImage(String iconId, int resizeMult, int xOffset, int yOffset, i
         }
     }
 }
+
 //////////////////////////////////////////////////////////////////////////////////
 // For more documentation see the following links:
 // https://github.com/m5stack/m5-docs/blob/master/docs/en/api/
