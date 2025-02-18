@@ -4,13 +4,23 @@
 #include "EGR425_Phase1_weather_bitmap_images.h"
 #include "WiFi.h"
 
+//Library for the NTP Client (Added code)
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+
 ////////////////////////////////////////////////////////////////////
 // Variables
 ////////////////////////////////////////////////////////////////////
+<<<<<<< HEAD
 String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?"; 
 // https://api.openweathermap.org/data/2.5/weather?zip=91016,us&units=imperial&appid=d4fbab132209f8288d5ee07e27bfa1d2
 
 String apiKey ="d4fbab132209f8288d5ee07e27bfa1d2";
+=======
+// TODO 3: Register for openweather account and get API key
+String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?";
+String apiKey ="94cb6c1ed9dad1ae1e364fe226adc4b7";
+>>>>>>> main
 
 // WiFi variables
 String wifiNetworkName = "CBU-LANCERS";
@@ -36,6 +46,7 @@ double tempNowC;
 double tempMin;
 double tempMax;
 
+<<<<<<< HEAD
 int zipCode = 91016; // default monrovia
 
 // Enum
@@ -44,6 +55,18 @@ static State displayState = WEATHER;
 
 // Misc
 bool tp = false;
+=======
+
+//NTP objects (Added code)
+WiFiUDP ntpUDP;
+// Example offset of -8 hrs from UTC (Pacific Standard Time). Change as needed.
+// Also set update interval to 60,000 ms (1 minute) for example:
+NTPClient timeClient(ntpUDP, "pool.ntp.org", -8 * 3600, 60000);
+
+// We'll store the "last sync" time as a string
+String lastSyncTime = "Not synced";
+
+>>>>>>> main
 
 ////////////////////////////////////////////////////////////////////
 // Method header declarations
@@ -73,6 +96,11 @@ void setup() {
     }
     Serial.print("\n\nConnected to WiFi network with IP address: ");
     Serial.println(WiFi.localIP());
+
+    // Initialize NTP client (added code)
+    timeClient.begin();
+    // Force an immediate update once connected (added code)
+    timeClient.update();
 }
 
 ///////////////////////////////////////////////////////////////
@@ -155,6 +183,24 @@ void loop() {
 // API and saves them into the fields defined above
 /////////////////////////////////////////////////////////////////
 void fetchWeatherDetails() {
+    
+    //Update the NTP client to get current time (added code)
+    timeClient.update();
+  
+    // Convert 24-hr time to 12-hr with AM/PM
+    int hour = timeClient.getHours();
+    int minute = timeClient.getMinutes();
+    int second = timeClient.getSeconds();
+  
+    int hour12 = hour % 12;
+    if (hour12 == 0) hour12 = 12;
+  
+    String ampm = (hour >= 12) ? "PM" : "AM";
+  
+    char buffer[12]; // Enough for "HH:MM:SSAM"
+    sprintf(buffer, "%02d:%02d:%02d%s", hour12, minute, second, ampm.c_str());
+    lastSyncTime = String(buffer);
+
     //////////////////////////////////////////////////////////////////
     // Hardcode the specific city,state,country into the query
     // Examples: https://api.openweathermap.org/data/2.5/weather?q=riverside,ca,usa&units=imperial&appid=YOUR_API_KEY
@@ -275,6 +321,15 @@ void drawWeatherDisplay() {
     M5.Lcd.setTextSize(2);
     M5.Lcd.setTextWrap(true); // Enable text wrapping for long city names
     M5.Lcd.printf("%s\n", cityName.c_str());
+
+    //    Draw last sync time (added code)
+    //    Example: "Last Sync: 05:23:45PM"
+    //    We'll put it near the bottom of the screen
+    int timestampY = sHeight - 30;  // 30 px from bottom
+    M5.Lcd.setCursor(pad, timestampY);
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(primaryTextColor);
+    M5.Lcd.printf("Last Sync: %s", lastSyncTime.c_str());
 }
 
 /////////////////////////////////////////////////////////////////
