@@ -1,0 +1,7 @@
+STEMMA QT Wires
+	https://learn.adafruit.com/introducing-adafruit-stemma-qt/technical-specs
+
+https://www.adafruit.com/product/4161
+https://learn.adafruit.com/adafruit-vcnl4040-proximity-sensor?view=all
+https://github.com/adafruit/Adafruit_VCNL4040
+

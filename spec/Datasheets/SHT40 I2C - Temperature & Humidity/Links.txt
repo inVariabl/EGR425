@@ -1,0 +1,8 @@
+STEMMA QT Wires
+	https://learn.adafruit.com/introducing-adafruit-stemma-qt/technical-specs
+
+https://www.adafruit.com/product/4885
+https://learn.adafruit.com/adafruit-sht40-temperature-humidity-sensor?view=all
+https://github.com/adafruit/Adafruit_SHT4x
+
+

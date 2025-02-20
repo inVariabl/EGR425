@@ -1,0 +1,6 @@
+https://learn.sparkfun.com/tutorials/i2c/all
+https://en.wikipedia.org/wiki/I%C2%B2C
+https://www.youtube.com/watch?v=qTLRRg6Mee0  (I2C)
+https://www.youtube.com/watch?v=NyxQkGXbG6I  (SPI)
+https://www.youtube.com/watch?v=qNLvoSQCx60  (I2S)
+

@@ -91,7 +91,7 @@ void fetchWeatherDetails() {
     // Hardcode the specific city,state,country into the query
     // Examples: https://api.openweathermap.org/data/2.5/weather?q=riverside,ca,usa&units=imperial&appid=YOUR_API_KEY
     //////////////////////////////////////////////////////////////////
-    String serverURL = urlOpenWeather + "q=monrovia,ca,usa&units=imperial&appid=" + apiKey;
+    String serverURL = urlOpenWeather + "q=Washington,DC,USA&units=imperial&appid=" + apiKey;
     //Serial.println(serverURL); // Debug print
 
     //////////////////////////////////////////////////////////////////
