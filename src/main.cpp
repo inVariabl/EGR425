@@ -1,26 +1,16 @@
-#include <M5Core2.h>
+#include <M5Unified.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include "EGR425_Phase1_weather_bitmap_images.h"
 #include "WiFi.h"
-
-//Library for the NTP Client (Added code)
 #include <WiFiUdp.h>
 #include <NTPClient.h>
 
 ////////////////////////////////////////////////////////////////////
 // Variables
 ////////////////////////////////////////////////////////////////////
-<<<<<<< HEAD
-String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?"; 
-// https://api.openweathermap.org/data/2.5/weather?zip=91016,us&units=imperial&appid=d4fbab132209f8288d5ee07e27bfa1d2
-
-String apiKey ="d4fbab132209f8288d5ee07e27bfa1d2";
-=======
-// TODO 3: Register for openweather account and get API key
 String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?";
-String apiKey ="94cb6c1ed9dad1ae1e364fe226adc4b7";
->>>>>>> main
+String apiKey = "d4fbab132209f8288d5ee07e27bfa1d2";
 
 // WiFi variables
 String wifiNetworkName = "CBU-LANCERS";
@@ -28,26 +18,27 @@ String wifiPassword = "L@ncerN@tion";
 
 // Time variables
 unsigned long lastTime = 0;
-unsigned long timerDelay = 5000;  // 5000; 5 minutes (300,000ms) or 5 seconds (5,000ms)
+unsigned long timerDelay = 2500;
 
 // LCD variables
 int sWidth;
 int sHeight;
-bool wasTouched = false; // Track if touch was active
-bool touchHandled = false; // Ensure touch is handled only once
+bool wasTouched = false;
+bool touchHandled = false;
 
 // Weather/zip variables
 String strWeatherIcon;
 String strWeatherDesc;
 String cityName;
-double tempNowF;
+String unit = "F";
+double tempNow;
 double tempNowC;
-
 double tempMin;
 double tempMax;
+bool isFahrenheit = true;
 
-<<<<<<< HEAD
-int zipCode = 91016; // default monrovia
+int zipcode = 91016;
+int zipcodeArray[5] = {9, 1, 0, 1, 6};
 
 // Enum
 enum State { WEATHER, ZIP };
@@ -55,213 +46,120 @@ static State displayState = WEATHER;
 
 // Misc
 bool tp = false;
-=======
 
-//NTP objects (Added code)
+// NTP objects
 WiFiUDP ntpUDP;
-// Example offset of -8 hrs from UTC (Pacific Standard Time). Change as needed.
-// Also set update interval to 60,000 ms (1 minute) for example:
 NTPClient timeClient(ntpUDP, "pool.ntp.org", -8 * 3600, 60000);
-
-// We'll store the "last sync" time as a string
 String lastSyncTime = "Not synced";
 
->>>>>>> main
-
 ////////////////////////////////////////////////////////////////////
-// Method header declarations
+// Method headers
 ////////////////////////////////////////////////////////////////////
 String httpGETRequest(const char* serverName);
 void drawWeatherImage(String iconId, int resizeMult, int xOffset, int yOffset, int iconWidth, int iconHeight);
 void fetchWeatherDetails();
 void drawWeatherDisplay();
-int tempToCelsius(double tempF);
 void drawZipcodeSelectScreen();
+void checkButtonPress();
+// void initButtons();
+void getZipcode();
 
 ////////////////////////////////////////////////////////////////////
 void setup() {
-    // Initialize the device
     M5.begin();
 
-    // Set screen orientation and get height/width
-    sWidth = M5.Lcd.width();
-    sHeight = M5.Lcd.height();
+    sWidth = M5.Display.width();
+    sHeight = M5.Display.height();
 
-    // TODO 2: Connect to WiFi
     WiFi.begin(wifiNetworkName.c_str(), wifiPassword.c_str());
-    Serial.printf("Connecting");
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
-        Serial.print(".");
     }
-    Serial.print("\n\nConnected to WiFi network with IP address: ");
-    Serial.println(WiFi.localIP());
 
-    // Initialize NTP client (added code)
     timeClient.begin();
-    // Force an immediate update once connected (added code)
     timeClient.update();
 }
 
 ///////////////////////////////////////////////////////////////
 void loop() {
     M5.update();
+    if (M5.BtnA.wasPressed()) {
+        isFahrenheit = !isFahrenheit;
+        fetchWeatherDetails();
+        delay(10);
+        drawWeatherDisplay();
+    }
 
-    // switch state on B press
+    if (M5.Touch.getDetail().wasPressed() && displayState == ZIP) {
+        checkButtonPress();
+    }
+
     if (M5.BtnB.wasPressed()) {
-        Serial.print("B pressed\n");
-
-        // switch to ZIP state
-        if (displayState == WEATHER) { // update timerDelay
-            
-            // draw instantly after press
+        if (displayState == WEATHER) {
             drawZipcodeSelectScreen();
-
             displayState = ZIP;
             timerDelay = 1000;
-            tp = false;            
-        } 
-
-        // switch to WEATHER state
-        else {
-
-            // draw instantly after press
-            fetchWeatherDetails();
-            drawWeatherDisplay();
-
-            displayState = WEATHER;
-            timerDelay = 5000;
-        }
-    }
-
-    // Refresh the ZIP screen when someone presses a button
-    if (displayState == ZIP) {
-        if (M5.Touch.ispressed()) {
-            if (!wasTouched) {
-                wasTouched = true;  // Mark as touched
-                touchHandled = false; // Reset the handled flag
-            }
+            tp = false;
         } else {
-            if (wasTouched && !touchHandled) {
-                touchHandled = true;  // Prevent multiple triggers
-                Serial.print("Touch detected\n");
-                drawZipcodeSelectScreen();
-            }
-            wasTouched = false; // Reset for next touch
+            getZipcode();
+            fetchWeatherDetails();
+            delay(10);
+            drawWeatherDisplay();
+            displayState = WEATHER;
+            timerDelay = 2500;
         }
     }
 
-    // Slow weather refreesh loop
     if ((millis() - lastTime) > timerDelay) {
-
         if (WiFi.status() == WL_CONNECTED) {
-            
             if (displayState == WEATHER) {
                 fetchWeatherDetails();
                 drawWeatherDisplay();
             }
-
-            else if (displayState == ZIP) {
-                if (!tp) { 
-                    Serial.print("Selecting ZIP");
-                    tp = true;
-                } else Serial.print(".");
-            }
-        } 
-        
-        else {
-            Serial.println("WiFi Disconnected");
         }
-
-        // Update the last time to NOW
         lastTime = millis();
     }
 }
 
 /////////////////////////////////////////////////////////////////
-// This method fetches the weather details from the OpenWeather
-// API and saves them into the fields defined above
-/////////////////////////////////////////////////////////////////
 void fetchWeatherDetails() {
-    
     //Update the NTP client to get current time (added code)
     timeClient.update();
-  
+
     // Convert 24-hr time to 12-hr with AM/PM
     int hour = timeClient.getHours();
     int minute = timeClient.getMinutes();
     int second = timeClient.getSeconds();
-  
+
     int hour12 = hour % 12;
     if (hour12 == 0) hour12 = 12;
-  
+
     String ampm = (hour >= 12) ? "PM" : "AM";
-  
+
     char buffer[12]; // Enough for "HH:MM:SSAM"
     sprintf(buffer, "%02d:%02d:%02d%s", hour12, minute, second, ampm.c_str());
     lastSyncTime = String(buffer);
 
-    //////////////////////////////////////////////////////////////////
-    // Hardcode the specific city,state,country into the query
-    // Examples: https://api.openweathermap.org/data/2.5/weather?q=riverside,ca,usa&units=imperial&appid=YOUR_API_KEY
-    //////////////////////////////////////////////////////////////////
-
-    // changing zip code
-    String serverURL = urlOpenWeather + "zip=" + zipCode + ",us&units=imperial&appid=" + apiKey;
-
-    //////////////////////////////////////////////////////////////////
-    // Make GET request and store reponse
-    //////////////////////////////////////////////////////////////////
+    timeClient.update();
+    String serverURL = urlOpenWeather + "zip=" + zipcode + ",us&units=imperial&appid=" + apiKey;
     String response = httpGETRequest(serverURL.c_str());
-    //Serial.print(response); // Debug print
 
-    //////////////////////////////////////////////////////////////////
-    // Import ArduinoJSON Library and then use arduinojson.org/v6/assistant to
-    // compute the proper capacity (this is a weird library thing) and initialize
-    // the json object
-    //////////////////////////////////////////////////////////////////
-    const size_t jsonCapacity = 768+250;
+    const size_t jsonCapacity = 768 + 250;
     DynamicJsonDocument objResponse(jsonCapacity);
-
-    //////////////////////////////////////////////////////////////////
-    // Deserialize the JSON document and test if parsing succeeded
-    //////////////////////////////////////////////////////////////////
     DeserializationError error = deserializeJson(objResponse, response);
-    if (error) {
-        Serial.print(F("deserializeJson() failed: "));
-        Serial.println(error.f_str());
-        return;
-    }
-    //serializeJsonPretty(objResponse, Serial); // Debug print
+    if (error) return;
 
-    //////////////////////////////////////////////////////////////////
-    // Parse Response to get the weather description and icon
-    //////////////////////////////////////////////////////////////////
     JsonArray arrWeather = objResponse["weather"];
     JsonObject objWeather0 = arrWeather[0];
-    String desc = objWeather0["main"];
-    String icon = objWeather0["icon"];
-    String city = objResponse["name"];
-
-    // ArduionJson library will not let us save directly to these
-    // variables in the 3 lines above for unknown reason
-    strWeatherDesc = desc;
-    strWeatherIcon = icon;
-    cityName = city;
-
-    // Parse response to get the temperatures
+    strWeatherDesc = objWeather0["main"].as<String>();
+    strWeatherIcon = objWeather0["icon"].as<String>();
+    cityName = objResponse["name"].as<String>();
     JsonObject objMain = objResponse["main"];
-    tempNowF = objMain["temp"];
+    tempNow = objMain["temp"];
     tempMin = objMain["temp_min"];
     tempMax = objMain["temp_max"];
-
-    // Remove the rounding to get actual temperatures
-    Serial.printf("NOW: %f F and %s\tMIN: %f F\tMax: %f F\n", tempNowF, strWeatherDesc, tempMin, tempMax);
 }
 
-/////////////////////////////////////////////////////////////////
-// Update the display based on the weather variables defined
-// at the top of the screen.
 /////////////////////////////////////////////////////////////////
 void drawWeatherDisplay() {
     //////////////////////////////////////////////////////////////////
@@ -269,6 +167,8 @@ void drawWeatherDisplay() {
     //////////////////////////////////////////////////////////////////
     uint16_t primaryTextColor;
     uint16_t backgroundColor;
+    uint16_t syncTextColor = TFT_DARKGREY;
+
     if (strWeatherIcon.indexOf("d") >= 0) {
         backgroundColor = TFT_CYAN;
         primaryTextColor = TFT_DARKGREY;
@@ -292,35 +192,39 @@ void drawWeatherDisplay() {
     int pad = 20; // Increased padding for better spacing
     int textX = pad;
     int textY = pad;
-    
+
+    tempNow = isFahrenheit ? tempNow : (tempNow - 32) * 5 / 9;
+    tempMin = isFahrenheit ? tempMin : (tempMin - 32) * 5 / 9;
+    tempMax = isFahrenheit ? tempMax : (tempMax - 32) * 5 / 9;
+    unit = isFahrenheit ? "F" : "C";
 
     // Draw "LO" temperature
-    M5.Lcd.setCursor(textX, textY);
-    M5.Lcd.setTextColor(TFT_RED);
-    M5.Lcd.setTextSize(2);
-    M5.Lcd.printf("HI: %0.fF\n", tempMax);
+    M5.Display.setCursor(textX, textY);
+    M5.Display.setTextColor(TFT_RED);
+    M5.Display.setTextSize(2);
+    M5.Display.printf("HI: %.0f%s\n", tempMax, unit);
 
     // Draw current temperature
     textY += 30; // Adjust vertical spacing
-    M5.Lcd.setCursor(textX, textY);
-    M5.Lcd.setTextColor(primaryTextColor);
-    M5.Lcd.setTextSize(6); // Larger font size for current temperature
-    M5.Lcd.printf("%0.fF\n", tempNowF);
+    M5.Display.setCursor(textX, textY);
+    M5.Display.setTextColor(primaryTextColor);
+    M5.Display.setTextSize(6); // Larger font size for current temperature
+    M5.Display.printf("%.0f%s\n", tempNow, unit);
 
     // Draw "HI" temperature
     textY += 70; // Adjust vertical spacing
-    M5.Lcd.setCursor(textX, textY);
-    M5.Lcd.setTextColor(TFT_BLUE);
-    M5.Lcd.setTextSize(2);
-    M5.Lcd.printf("LO: %0.fF\n", tempMin);
+    M5.Display.setCursor(textX, textY);
+    M5.Display.setTextColor(TFT_BLUE);
+    M5.Display.setTextSize(2);
+    M5.Display.printf("LO: %.0f%s\n", tempMin, unit);
 
     // Draw city name
     textY += 30; // Adjust vertical spacing
-    M5.Lcd.setCursor(textX, textY);
-    M5.Lcd.setTextColor(primaryTextColor);
-    M5.Lcd.setTextSize(2);
-    M5.Lcd.setTextWrap(true); // Enable text wrapping for long city names
-    M5.Lcd.printf("%s\n", cityName.c_str());
+    M5.Display.setCursor(textX, textY);
+    M5.Display.setTextColor(primaryTextColor);
+    M5.Display.setTextSize(2);
+    M5.Display.setTextWrap(true); // Enable text wrapping for long city names
+    M5.Display.printf("%s\n", cityName.c_str());
 
     //    Draw last sync time (added code)
     //    Example: "Last Sync: 05:23:45PM"
@@ -328,60 +232,98 @@ void drawWeatherDisplay() {
     int timestampY = sHeight - 30;  // 30 px from bottom
     M5.Lcd.setCursor(pad, timestampY);
     M5.Lcd.setTextSize(2);
-    M5.Lcd.setTextColor(primaryTextColor);
+    M5.Lcd.setTextColor(syncTextColor);
     M5.Lcd.printf("Last Sync: %s", lastSyncTime.c_str());
 }
 
-/////////////////////////////////////////////////////////////////
-// Draw the zipcode selection screen
-/////////////////////////////////////////////////////////////////
-void drawZipcodeSelectScreen() {
-    // Draw background - light blue if day time and navy blue of night
-    uint16_t primaryTextColor = TFT_DARKGREY;
-    uint16_t backgroundColor = TFT_WHITE;
+void checkButtonPress() {
+    if (M5.Touch.getCount() == 0) return;
 
-    int padding = 10;
-    int textX = sWidth / 5;
-    int textY = sHeight / 2;
-    int headerX = sWidth - 50;
-    int headerY = 10;
+    auto t = M5.Touch.getDetail(0);
 
-    M5.Lcd.fillScreen(backgroundColor);
-    // Draw the header
-    M5.Lcd.setCursor(headerX, headerY);
-    M5.Lcd.setTextColor(TFT_RED);
-    M5.Lcd.setTextSize(3);
+    int startX = 40;
+    int startY = 100;
 
-    // Draw the zipcode 
-    M5.Lcd.setCursor(textX, textY);
-    M5.Lcd.setTextColor(primaryTextColor);
-    M5.Lcd.setTextSize(6);
-    M5.Lcd.print(zipCode);
+    for (int i = 0; i < 5; i++) {
+        int xPos = startX + i * 50;
+
+        // Check if "+" button is pressed
+        if (t.x > xPos && t.x < xPos + 40 && t.y > startY - 40 && t.y < startY - 10) {
+            zipcodeArray[i] = (zipcodeArray[i] + 1) % 10;
+            drawZipcodeSelectScreen();
+        }
+
+        // Check if "-" button is pressed
+        if (t.x > xPos && t.x < xPos + 40 && t.y > startY + 60 && t.y < startY + 90) {
+            zipcodeArray[i] = (zipcodeArray[i] - 1 + 10) % 10;
+            drawZipcodeSelectScreen();
+        }
+    }
+    getZipcode();
 }
 
 /////////////////////////////////////////////////////////////////
-// This method takes in a URL and makes a GET request to the
-// URL, returning the response.
-/////////////////////////////////////////////////////////////////
-String httpGETRequest(const char* serverURL) {
+void drawZipcodeSelectScreen() {
+    int padding = 10;
+    int zipcodeX = 40;
+    int zipcodeY = 100;
+    int headerX = 30;
+    int headerY = 10;
 
-    // Initialize client
-    HTTPClient http;
-    http.begin(serverURL);
+    M5.Display.fillScreen(TFT_WHITE);
 
-    // Send HTTP GET request and obtain response
-    int httpResponseCode = http.GET();
-    String response = http.getString();
+    // Draw the header
+    M5.Display.setCursor(headerX, headerY);
+    M5.Display.setTextColor(TFT_RED);
+    M5.Display.setTextSize(3);
+    M5.Display.print("Enter Zip Code");
 
-    // Check if got an error
-    if (httpResponseCode > 0)
-        Serial.printf("HTTP Response code: %d\n", httpResponseCode);
-    else {
-        Serial.printf("HTTP Response ERROR code: %d\n", httpResponseCode);
-        Serial.printf("Server Response: %s\n", response);
+    // Draw the zipcode 
+    M5.Display.setCursor(zipcodeX, zipcodeY);
+    M5.Display.setTextColor(TFT_DARKGREY);
+    M5.Display.setTextSize(2);
+
+    for (int i = 0; i < 5; i++) {
+        int boxX = zipcodeX + i * 50; 
+
+        // Draw "+" button
+        M5.Display.setTextColor(TFT_DARKGREY);
+        M5.Display.fillRect(boxX, zipcodeY - 40, 40, 30, TFT_GREEN);
+        M5.Display.setCursor(boxX + 15, zipcodeY - 30);
+        M5.Display.print("+");
+
+        // Draw ZIP digit
+        M5.Display.fillRect(boxX, zipcodeY, 40, 50, TFT_WHITE);
+        M5.Display.setTextColor(TFT_BLACK);
+        M5.Display.setCursor(boxX + 15, zipcodeY + 15);
+        M5.Display.print(zipcodeArray[i]);
+
+        // Draw "-" button
+        M5.Display.setTextColor(TFT_DARKGREY);
+        M5.Display.fillRect(boxX, zipcodeY + 60, 40, 30, TFT_RED);
+        M5.Display.setCursor(boxX + 15, zipcodeY + 70);
+        M5.Display.print("-");
     }
 
-    // Free resources and return response
+    // Draw the buttons
+    // initButtons();
+}
+
+void getZipcode() {
+    zipcode = 0;
+    for (int i = 0; i < 5; i++) {
+        zipcode = zipcode * 10 + zipcodeArray[i];
+    }
+}
+
+
+
+/////////////////////////////////////////////////////////////////
+String httpGETRequest(const char* serverURL) {
+    HTTPClient http;
+    http.begin(serverURL);
+    int httpResponseCode = http.GET();
+    String response = http.getString();
     http.end();
     return response;
 }
