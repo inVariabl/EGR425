@@ -5,6 +5,9 @@
 #include "WiFi.h"
 #include <WiFiUdp.h>
 #include <NTPClient.h>
+// === Added for Proximity Sensor ===
+#include <Wire.h>
+#include "Adafruit_VCNL4040.h"
 
 ////////////////////////////////////////////////////////////////////
 // Variables
@@ -40,6 +43,11 @@ bool isFahrenheit = true;
 int zipcode = 91016;
 int zipcodeArray[5] = {9, 1, 0, 1, 6};
 
+// === Added for Proximity Sensor ===
+Adafruit_VCNL4040 vcnl4040 = Adafruit_VCNL4040();
+const uint16_t PROXIMITY_THRESHOLD = 100; // Adjust this value based on testing
+bool displayOn = true;
+
 // Enum
 enum State { WEATHER, ZIP };
 static State displayState = WEATHER;
@@ -61,8 +69,9 @@ void fetchWeatherDetails();
 void drawWeatherDisplay();
 void drawZipcodeSelectScreen();
 void checkButtonPress();
-// void initButtons();
 void getZipcode();
+// === Added for Proximity Sensor ===
+void checkProximity();
 
 ////////////////////////////////////////////////////////////////////
 void setup() {
@@ -70,6 +79,15 @@ void setup() {
 
     sWidth = M5.Display.width();
     sHeight = M5.Display.height();
+
+    // === Added for Proximity Sensor ===
+    Wire.begin(); // Initialize I2C
+    if (!vcnl4040.begin()) {
+        // Serial.println("Couldn't find VCNL4040 sensor");
+        while (1); // Halt if sensor not found
+    }
+    vcnl4040.setProximityLEDCurrent(VCNL4040_LED_CURRENT_100MA); // Set LED current (1-20 mA)
+    vcnl4040.setProximityLEDDutyCycle(VCNL4040_LED_DUTY_1_40); // 1/40 duty cycle
 
     WiFi.begin(wifiNetworkName.c_str(), wifiPassword.c_str());
     while (WiFi.status() != WL_CONNECTED) {
@@ -83,18 +101,22 @@ void setup() {
 ///////////////////////////////////////////////////////////////
 void loop() {
     M5.update();
-    if (M5.BtnA.wasPressed()) {
+    
+    // === Added for Proximity Sensor ===
+    checkProximity(); // Check proximity sensor and control display
+    
+    if (M5.BtnA.wasPressed() && displayOn) {  // Only process if display is on
         isFahrenheit = !isFahrenheit;
         fetchWeatherDetails();
         delay(10);
         drawWeatherDisplay();
     }
 
-    if (M5.Touch.getDetail().wasPressed() && displayState == ZIP) {
+    if (M5.Touch.getDetail().wasPressed() && displayState == ZIP && displayOn) {
         checkButtonPress();
     }
 
-    if (M5.BtnB.wasPressed()) {
+    if (M5.BtnB.wasPressed() && displayOn) {
         if (displayState == WEATHER) {
             drawZipcodeSelectScreen();
             displayState = ZIP;
@@ -110,7 +132,7 @@ void loop() {
         }
     }
 
-    if ((millis() - lastTime) > timerDelay) {
+    if ((millis() - lastTime) > timerDelay && displayOn) {
         if (WiFi.status() == WL_CONNECTED) {
             if (displayState == WEATHER) {
                 fetchWeatherDetails();
@@ -118,6 +140,28 @@ void loop() {
             }
         }
         lastTime = millis();
+    }
+}
+
+// === Added for Proximity Sensor ===
+void checkProximity() {
+    uint16_t proximity = vcnl4040.getProximity();
+    
+    if (proximity > PROXIMITY_THRESHOLD && displayOn) {
+        // Too close - turn off display
+        M5.Display.sleep();
+        displayOn = false;
+    } 
+    else if (proximity <= PROXIMITY_THRESHOLD && !displayOn) {
+        // Far enough - turn on display
+        M5.Display.wakeup();
+        displayOn = true;
+        // Redraw the screen based on current state
+        if (displayState == WEATHER) {
+            drawWeatherDisplay();
+        } else {
+            drawZipcodeSelectScreen();
+        }
     }
 }
 

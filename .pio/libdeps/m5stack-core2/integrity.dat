@@ -1,3 +1,4 @@
 m5stack/M5Unified@^0.2.4
-arduino-libraries/NTPClient@^3.2.1
 bblanchon/ArduinoJson@^7.0.2
+arduino-libraries/NTPClient@^3.2.1
+adafruit/Adafruit VCNL4040@^1.0.4
