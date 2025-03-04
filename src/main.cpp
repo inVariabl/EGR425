@@ -5,7 +5,6 @@
 #include "WiFi.h"
 #include <WiFiUdp.h>
 #include <NTPClient.h>
-// === Added for Proximity Sensor ===
 #include <Wire.h>
 #include "Adafruit_VCNL4040.h"
 
@@ -15,21 +14,17 @@
 String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?";
 String apiKey = "d4fbab132209f8288d5ee07e27bfa1d2";
 
-// WiFi variables
 String wifiNetworkName = "CBU-LANCERS";
 String wifiPassword = "L@ncerN@tion";
 
-// Time variables
 unsigned long lastTime = 0;
 unsigned long timerDelay = 2500;
 
-// LCD variables
 int sWidth;
 int sHeight;
 bool wasTouched = false;
 bool touchHandled = false;
 
-// Weather/zip variables
 String strWeatherIcon;
 String strWeatherDesc;
 String cityName;
@@ -43,19 +38,21 @@ bool isFahrenheit = true;
 int zipcode = 91016;
 int zipcodeArray[5] = {9, 1, 0, 1, 6};
 
-// === Added for Proximity Sensor ===
 Adafruit_VCNL4040 vcnl4040 = Adafruit_VCNL4040();
 const uint16_t PROXIMITY_THRESHOLD = 100; // Adjust this value based on testing
 bool displayOn = true;
 
-// Enum
+// === Added for Light Sensor ===
+const uint16_t MIN_LIGHT = 0;        // Minimum ambient light value
+const uint16_t MAX_LIGHT = 1000;     // Maximum ambient light value (adjust based on testing)
+const uint8_t MIN_BRIGHTNESS = 10;   // Minimum LCD brightness (0-255)
+const uint8_t MAX_BRIGHTNESS = 255;  // Maximum LCD brightness (0-255)
+
 enum State { WEATHER, ZIP };
 static State displayState = WEATHER;
 
-// Misc
 bool tp = false;
 
-// NTP objects
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", -8 * 3600, 60000);
 String lastSyncTime = "Not synced";
@@ -70,8 +67,8 @@ void drawWeatherDisplay();
 void drawZipcodeSelectScreen();
 void checkButtonPress();
 void getZipcode();
-// === Added for Proximity Sensor ===
 void checkProximity();
+void adjustBrightness();
 
 ////////////////////////////////////////////////////////////////////
 void setup() {
@@ -80,14 +77,13 @@ void setup() {
     sWidth = M5.Display.width();
     sHeight = M5.Display.height();
 
-    // === Added for Proximity Sensor ===
-    Wire.begin(); // Initialize I2C
+    Wire.begin();
     if (!vcnl4040.begin()) {
-        // Serial.println("Couldn't find VCNL4040 sensor");
         while (1); // Halt if sensor not found
     }
-    vcnl4040.setProximityLEDCurrent(VCNL4040_LED_CURRENT_100MA); // Set LED current (1-20 mA)
-    vcnl4040.setProximityLEDDutyCycle(VCNL4040_LED_DUTY_1_40); // 1/40 duty cycle
+    vcnl4040.setProximityLEDCurrent(VCNL4040_LED_CURRENT_100MA);
+    vcnl4040.setProximityLEDDutyCycle(VCNL4040_LED_DUTY_1_40);
+    
 
     WiFi.begin(wifiNetworkName.c_str(), wifiPassword.c_str());
     while (WiFi.status() != WL_CONNECTED) {
@@ -96,14 +92,18 @@ void setup() {
 
     timeClient.begin();
     timeClient.update();
+    
+    // === Added for Light Sensor ===
+    M5.Display.setBrightness(MAX_BRIGHTNESS);  // Initial brightness setting
 }
 
 ///////////////////////////////////////////////////////////////
 void loop() {
     M5.update();
     
-    // === Added for Proximity Sensor ===
-    checkProximity(); // Check proximity sensor and control display
+    checkProximity();
+    // === Added for Light Sensor ===
+    adjustBrightness();  // Adjust LCD brightness based on ambient light
     
     if (M5.BtnA.wasPressed() && displayOn) {  // Only process if display is on
         isFahrenheit = !isFahrenheit;
@@ -143,7 +143,6 @@ void loop() {
     }
 }
 
-// === Added for Proximity Sensor ===
 void checkProximity() {
     uint16_t proximity = vcnl4040.getProximity();
     
@@ -165,9 +164,22 @@ void checkProximity() {
     }
 }
 
+// === Added for Light Sensor ===
+void adjustBrightness() {
+    if (!displayOn) return;  // Don't adjust brightness if display is off
+    
+    uint16_t light = vcnl4040.getLux();  // Get ambient light value in lux
+    
+    // Map light value to brightness range
+    light = constrain(light, MIN_LIGHT, MAX_LIGHT);  // Keep within bounds
+    uint8_t brightness = map(light, MIN_LIGHT, MAX_LIGHT, MIN_BRIGHTNESS, MAX_BRIGHTNESS);
+    
+    M5.Display.setBrightness(brightness);  // Set LCD brightness
+}
+
 /////////////////////////////////////////////////////////////////
 void fetchWeatherDetails() {
-    //Update the NTP client to get current time (added code)
+    // Update the NTP client to get current time
     timeClient.update();
 
     // Convert 24-hr time to 12-hr with AM/PM
@@ -184,21 +196,20 @@ void fetchWeatherDetails() {
     sprintf(buffer, "%02d:%02d:%02d%s", hour12, minute, second, ampm.c_str());
     lastSyncTime = String(buffer);
 
-    timeClient.update();
     String serverURL = urlOpenWeather + "zip=" + zipcode + ",us&units=imperial&appid=" + apiKey;
     String response = httpGETRequest(serverURL.c_str());
 
-    const size_t jsonCapacity = 768 + 250;
-    DynamicJsonDocument objResponse(jsonCapacity);
-    DeserializationError error = deserializeJson(objResponse, response);
+    // === Updated for ArduinoJson 7.x ===
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, response);
     if (error) return;
 
-    JsonArray arrWeather = objResponse["weather"];
+    JsonArray arrWeather = doc["weather"];
     JsonObject objWeather0 = arrWeather[0];
     strWeatherDesc = objWeather0["main"].as<String>();
     strWeatherIcon = objWeather0["icon"].as<String>();
-    cityName = objResponse["name"].as<String>();
-    JsonObject objMain = objResponse["main"];
+    cityName = doc["name"].as<String>();
+    JsonObject objMain = doc["main"];
     tempNow = objMain["temp"];
     tempMin = objMain["temp_min"];
     tempMax = objMain["temp_max"];
@@ -270,9 +281,7 @@ void drawWeatherDisplay() {
     M5.Display.setTextWrap(true); // Enable text wrapping for long city names
     M5.Display.printf("%s\n", cityName.c_str());
 
-    //    Draw last sync time (added code)
-    //    Example: "Last Sync: 05:23:45PM"
-    //    We'll put it near the bottom of the screen
+    // Draw last sync time
     int timestampY = sHeight - 30;  // 30 px from bottom
     M5.Lcd.setCursor(pad, timestampY);
     M5.Lcd.setTextSize(2);
@@ -348,9 +357,6 @@ void drawZipcodeSelectScreen() {
         M5.Display.setCursor(boxX + 15, zipcodeY + 70);
         M5.Display.print("-");
     }
-
-    // Draw the buttons
-    // initButtons();
 }
 
 void getZipcode() {
@@ -359,8 +365,6 @@ void getZipcode() {
         zipcode = zipcode * 10 + zipcodeArray[i];
     }
 }
-
-
 
 /////////////////////////////////////////////////////////////////
 String httpGETRequest(const char* serverURL) {
