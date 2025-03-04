@@ -1,3 +1,6 @@
+// Caleb Aragones, Kwang Hak Lee, Daniel Crooks
+// EGR 425 - Project 1 and 2
+
 #include <M5Unified.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
@@ -6,9 +9,14 @@
 #include <WiFiUdp.h>
 #include <NTPClient.h>
 
+// Project 2
+#include "../include/I2C_RW.h"
+#include <Wire.h>
+
 ////////////////////////////////////////////////////////////////////
 // Variables
 ////////////////////////////////////////////////////////////////////
+///// Project 1
 String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?";
 String apiKey = "d4fbab132209f8288d5ee07e27bfa1d2";
 
@@ -52,21 +60,47 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", -8 * 3600, 60000);
 String lastSyncTime = "Not synced";
 
+///// Project 2
+int const I2C_FREQ = 400000;
+
+#define SHT_I2C_ADDR 0x44
+// int const SHT_SDA_PIN = 32; 
+// int const SHT_SCL_PIN = 33; 
+
+#define VCNL_I2C_ADDR 0x60
+// int const VCNL_SDA_PIN = 21; 
+// int const VCNL_SCL_PIN = 22; 
+
+int const SDA_PIN = 32;
+int const SCL_PIN = 33;
+
+#define VCNL_REG_PROX_DATA 0x08
+#define VCNL_REG_ALS_DATA 0x09
+#define VCNL_REG_WHITE_DATA 0x0A
+#define VCNL_REG_PS_CONFIG 0x03
+#define VCNL_REG_ALS_CONFIG 0x00
+#define VCNL_REG_WHITE_CONFIG 0x04
+
 ////////////////////////////////////////////////////////////////////
 // Method headers
 ////////////////////////////////////////////////////////////////////
+///// Project 1
 String httpGETRequest(const char* serverName);
 void drawWeatherImage(String iconId, int resizeMult, int xOffset, int yOffset, int iconWidth, int iconHeight);
 void fetchWeatherDetails();
 void drawWeatherDisplay();
 void drawZipcodeSelectScreen();
 void checkButtonPress();
-// void initButtons();
 void getZipcode();
+
+///// Project 2
+void readSHT();
+void readVCNL();
 
 ////////////////////////////////////////////////////////////////////
 void setup() {
     M5.begin();
+    Serial.begin(115200);
 
     sWidth = M5.Display.width();
     sHeight = M5.Display.height();
@@ -78,6 +112,17 @@ void setup() {
 
     timeClient.begin();
     timeClient.update();
+
+    // Project 2
+
+    // Initialize I2C for VCNL and SHT sensor
+    I2C_RW::initI2C(VCNL_I2C_ADDR, I2C_FREQ, SDA_PIN, SCL_PIN);
+    I2C_RW::writeReg8Addr16DataWithProof(VCNL_REG_PS_CONFIG, 2, 0x0800, " to enable proximity sensor", true);
+    I2C_RW::writeReg8Addr16DataWithProof(VCNL_REG_ALS_CONFIG, 2, 0x0000, " to enable ambient light sensor", true);
+    I2C_RW::writeReg8Addr16DataWithProof(VCNL_REG_WHITE_CONFIG, 2, 0x0000, " to enable raw white light sensor", true);
+  
+    // Initialize I2C for SHT sensor
+    I2C_RW::writeReg8Addr16Data(0xFD, 0x0000, "to start measurement", true);
 }
 
 ///////////////////////////////////////////////////////////////
@@ -115,6 +160,11 @@ void loop() {
             if (displayState == WEATHER) {
                 fetchWeatherDetails();
                 drawWeatherDisplay();
+
+                // Project 2
+                readSHT();
+                delay(10);
+                readVCNL();
             }
         }
         lastTime = millis();
@@ -316,8 +366,6 @@ void getZipcode() {
     }
 }
 
-
-
 /////////////////////////////////////////////////////////////////
 String httpGETRequest(const char* serverURL) {
     HTTPClient http;
@@ -371,6 +419,52 @@ void drawWeatherImage(String iconId, int resizeMult, int xOffset, int yOffset, i
                 }
             }
         }
+    }
+}
+
+void readVCNL() {
+    int prox = I2C_RW::readReg8Addr16Data(VCNL_REG_PROX_DATA, 2, "to read proximity data", false);
+    Serial.printf("Proximity: %d\n", prox);
+
+    int als = I2C_RW::readReg8Addr16Data(VCNL_REG_ALS_DATA, 2, "to read ambient light data", false) * 0.1;
+    Serial.printf("Ambient Light: %d\n", als);
+
+    int rwl = I2C_RW::readReg8Addr16Data(VCNL_REG_WHITE_DATA, 2, "to read white light data", false) * 0.1;
+    Serial.printf("White Light: %d\n\n", rwl);
+}
+
+void readSHT() {
+    Wire.beginTransmission(SHT_I2C_ADDR);
+    Wire.write(0xFD);  // Measure T & RH with high precision
+    Wire.endTransmission();
+
+    delay(10);
+
+  // Read data from sensor
+    Wire.requestFrom(SHT_I2C_ADDR, 6);
+    if (Wire.available() == 6) {
+    uint8_t rx_bytes[6];
+    Wire.readBytes(rx_bytes, 6);
+
+    // Calculate temperature
+    int16_t t_ticks = (rx_bytes[0] << 8) | rx_bytes[1];
+    float t_degC = -45 + 175.0 * t_ticks / 65535.0;
+
+    // Calculate humidity
+    int16_t rh_ticks = (rx_bytes[3] << 8) | rx_bytes[4];
+    float rh_pRH = -6 + 125.0 * rh_ticks / 65535.0;
+    rh_pRH = constrain(rh_pRH, 0.0, 100.0);
+
+    // Print data to serial monitor
+    Serial.print("Temperature: ");
+    Serial.print(t_degC);
+    Serial.println("°C");
+    Serial.print("Humidity: ");
+    Serial.print(rh_pRH);
+    Serial.println("%");
+
+    } else {
+    Serial.println("Error reading data from SHT40!");
     }
 }
 
