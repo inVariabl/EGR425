@@ -49,7 +49,7 @@ int zipcode = 91016;
 int zipcodeArray[5] = {9, 1, 0, 1, 6};
 
 // Enum
-enum State { WEATHER, ZIP };
+enum State { WEATHER, ZIP, SENSOR };
 static State displayState = WEATHER;
 
 // Misc
@@ -60,16 +60,22 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", -8 * 3600, 60000);
 String lastSyncTime = "Not synced";
 
+// Sensor-related variables
+float lastTempC = -1000;     // Initial value to force first draw
+float lastHumidity = -1000;  // Initial value to force first draw
+unsigned long lastSensorUpdate = 0;
+const unsigned long sensorUpdateInterval = 5000;  // 5 seconds
+
 ///// Project 2
 int const I2C_FREQ = 400000;
 
 #define SHT_I2C_ADDR 0x44
-// int const SHT_SDA_PIN = 32; 
-// int const SHT_SCL_PIN = 33; 
+// int const SHT_SDA_PIN = 32;
+// int const SHT_SCL_PIN = 33;
 
 #define VCNL_I2C_ADDR 0x60
-// int const VCNL_SDA_PIN = 21; 
-// int const VCNL_SCL_PIN = 22; 
+// int const VCNL_SDA_PIN = 21;
+// int const VCNL_SCL_PIN = 22;
 
 int const SDA_PIN = 32;
 int const SCL_PIN = 33;
@@ -92,6 +98,7 @@ void drawWeatherDisplay();
 void drawZipcodeSelectScreen();
 void checkButtonPress();
 void getZipcode();
+void drawSensorDisplay();
 
 ///// Project 2
 void readSHT();
@@ -120,33 +127,47 @@ void setup() {
     I2C_RW::writeReg8Addr16DataWithProof(VCNL_REG_PS_CONFIG, 2, 0x0800, " to enable proximity sensor", true);
     I2C_RW::writeReg8Addr16DataWithProof(VCNL_REG_ALS_CONFIG, 2, 0x0000, " to enable ambient light sensor", true);
     I2C_RW::writeReg8Addr16DataWithProof(VCNL_REG_WHITE_CONFIG, 2, 0x0000, " to enable raw white light sensor", true);
-  
+
     // Initialize I2C for SHT sensor
     I2C_RW::writeReg8Addr16Data(0xFD, 0x0000, "to start measurement", true);
+
+	displayState = WEATHER;  // Still start with weather
 }
 
 ///////////////////////////////////////////////////////////////
 void loop() {
     M5.update();
+
+    // Existing button A handling
     if (M5.BtnA.wasPressed()) {
         isFahrenheit = !isFahrenheit;
-        fetchWeatherDetails();
-        delay(10);
-        drawWeatherDisplay();
+        if (displayState == WEATHER || displayState == SENSOR) {
+            fetchWeatherDetails();
+            delay(10);
+            displayState == WEATHER ? drawWeatherDisplay() : drawSensorDisplay();
+        }
     }
 
+    // Existing touch handling for ZIP screen
     if (M5.Touch.getDetail().wasPressed() && displayState == ZIP) {
         checkButtonPress();
     }
 
+    // Modify button B to cycle through all three screens
     if (M5.BtnB.wasPressed()) {
         if (displayState == WEATHER) {
             drawZipcodeSelectScreen();
             displayState = ZIP;
             timerDelay = 1000;
             tp = false;
-        } else {
+        } else if (displayState == ZIP) {
             getZipcode();
+            fetchWeatherDetails();
+            delay(10);
+            drawWeatherDisplay();
+            displayState = WEATHER;
+            timerDelay = 2500;
+        } else if (displayState == SENSOR) {
             fetchWeatherDetails();
             delay(10);
             drawWeatherDisplay();
@@ -155,16 +176,24 @@ void loop() {
         }
     }
 
+    // Add button C to switch to sensor screen
+    if (M5.BtnC.wasPressed()) {
+        drawSensorDisplay();
+        displayState = SENSOR;
+        timerDelay = 5000;  // 5-second updates for sensor screen
+    }
+
     if ((millis() - lastTime) > timerDelay) {
         if (WiFi.status() == WL_CONNECTED) {
             if (displayState == WEATHER) {
                 fetchWeatherDetails();
                 drawWeatherDisplay();
-
-                // Project 2
                 readSHT();
                 delay(10);
                 readVCNL();
+            } else if (displayState == SENSOR) {
+                readSHT();
+                drawSensorDisplay();
             }
         }
         lastTime = millis();
@@ -286,6 +315,92 @@ void drawWeatherDisplay() {
     M5.Lcd.printf("Last Sync: %s", lastSyncTime.c_str());
 }
 
+void drawSensorDisplay() {
+    // Read current sensor values
+    Wire.beginTransmission(SHT_I2C_ADDR);
+    Wire.write(0xFD);  // Measure T & RH with high precision
+    Wire.endTransmission();
+    delay(10);
+
+    float t_degC = 0;
+    float rh_pRH = 0;
+
+    Wire.requestFrom(SHT_I2C_ADDR, 6);
+    if (Wire.available() == 6) {
+        uint8_t rx_bytes[6];
+        Wire.readBytes(rx_bytes, 6);
+
+        int16_t t_ticks = (rx_bytes[0] << 8) | rx_bytes[1];
+        t_degC = -45 + 175.0 * t_ticks / 65535.0;
+
+        int16_t rh_ticks = (rx_bytes[3] << 8) | rx_bytes[4];
+        rh_pRH = -6 + 125.0 * rh_ticks / 65535.0;
+        rh_pRH = constrain(rh_pRH, 0.0, 100.0);
+    }
+
+    // Only redraw if values changed significantly
+    if (abs(t_degC - lastTempC) < 0.1 && abs(rh_pRH - lastHumidity) < 0.1) {
+        return;
+    }
+
+    lastTempC = t_degC;
+    lastHumidity = rh_pRH;
+
+    // Update time
+    timeClient.update();
+    int hour = timeClient.getHours();
+    int hour12 = hour % 12;
+    if (hour12 == 0) hour12 = 12;
+    String ampm = (hour >= 12) ? "PM" : "AM";
+    char buffer[12];
+    sprintf(buffer, "%02d:%02d:%02d%s", hour12, timeClient.getMinutes(), timeClient.getSeconds(), ampm.c_str());
+    lastSyncTime = String(buffer);
+
+    // Draw display
+    M5.Lcd.fillScreen(TFT_WHITE);
+
+    int pad = 20;
+    int textX = pad;
+    int textY = pad;
+
+    // Header
+    M5.Display.setCursor(textX, textY);
+    M5.Display.setTextColor(TFT_RED);
+    M5.Display.setTextSize(2);
+    M5.Display.println("Live Sensor Readings");
+
+    // Temperature
+    textY += 40;
+    float displayTemp = isFahrenheit ? (t_degC * 9/5) + 32 : t_degC;
+    M5.Display.setCursor(textX, textY);
+    M5.Display.setTextColor(TFT_DARKGREY);
+    M5.Display.setTextSize(6);
+    M5.Display.printf("%.1f%s\n", displayTemp, unit);
+
+    // Humidity
+    textY += 80;
+    M5.Display.setCursor(textX, textY);
+    M5.Display.setTextSize(4);
+    M5.Display.printf("%.1f%%\n", rh_pRH);
+
+    // Labels
+    textY = pad + 40;
+    M5.Display.setCursor(textX + 120, textY);
+    M5.Display.setTextSize(2);
+    M5.Display.print("Temperature");
+
+    textY += 80;
+    M5.Display.setCursor(textX + 120, textY);
+    M5.Display.print("Humidity");
+
+    // Timestamp
+    textY = sHeight - 30;
+    M5.Display.setCursor(pad, textY);
+    M5.Display.setTextColor(TFT_DARKGREY);
+    M5.Display.setTextSize(2);
+    M5.Display.printf("Last Sync: %s", lastSyncTime.c_str());
+}
+
 void checkButtonPress() {
     if (M5.Touch.getCount() == 0) return;
 
@@ -328,13 +443,13 @@ void drawZipcodeSelectScreen() {
     M5.Display.setTextSize(3);
     M5.Display.print("Enter Zip Code");
 
-    // Draw the zipcode 
+    // Draw the zipcode
     M5.Display.setCursor(zipcodeX, zipcodeY);
     M5.Display.setTextColor(TFT_DARKGREY);
     M5.Display.setTextSize(2);
 
     for (int i = 0; i < 5; i++) {
-        int boxX = zipcodeX + i * 50; 
+        int boxX = zipcodeX + i * 50;
 
         // Draw "+" button
         M5.Display.setTextColor(TFT_DARKGREY);
