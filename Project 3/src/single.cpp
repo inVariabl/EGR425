@@ -4,6 +4,13 @@
 // Seesaw Gamepad setup
 Adafruit_seesaw ss;
 #define SEESAW_ADDR 0x50 // I2C address from reference code
+#define JOYSTICK_X_PIN 14  // Analog X-axis
+#define JOYSTICK_Y_PIN 15  // Analog Y-axis
+#define BUTTON_A_PIN 5     // Digital pin for Button A
+uint32_t button_mask = (1UL << BUTTON_A_PIN); // Button mask for configuration
+// Joystick thresholds
+const int JOYSTICK_DEADZONE = 100; // Deadzone to avoid jitter
+const int JOYSTICK_MAX = 1023;     // Max analog value from Seesaw
 
 // Grid settings
 const int GRID_SIZE = 8;
@@ -24,18 +31,6 @@ int hits = 0;
 int totalHitsNeeded = 9; // Sum of ship lengths (4 + 3 + 2)
 bool gameOver = false;
 bool gridDrawn = false; // Flag to draw grid only once
-
-// Joystick thresholds
-const int JOYSTICK_DEADZONE = 100; // Deadzone to avoid jitter
-const int JOYSTICK_MAX = 1023;     // Max analog value from Seesaw
-
-// Seesaw pin definitions (from reference code)
-#define JOYSTICK_X_PIN 14  // Analog X-axis
-#define JOYSTICK_Y_PIN 15  // Analog Y-axis
-#define BUTTON_A_PIN 5     // Digital pin for Button A
-
-// Button mask for configuration
-uint32_t button_mask = (1UL << BUTTON_A_PIN);
 
 // Function declarations
 void drawInitialGrid();
