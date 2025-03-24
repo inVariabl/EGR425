@@ -1,10 +1,14 @@
 # Screens
-1. pairing
-2. placing the ships
-3. waiting for other player
+## Game Setup
+- [ ] BLE Pairing Screen (untested)
+- [x] Ship Placing Screen
+- [ ] BLE Waiting for other player to be done placing ships
 
-4. main game loop
-a. selecting square, "firing"
-b. waiting for other person
+## Main Game Loop
+- [x] Move Cursor Around
+- [x] Place Shots w/ Gamepad or Touch Screen
+- [ ] Communicate Shot over BLE to other device (untested)
+- [ ] Wait for reponse turn
 
-5. Win / Loss
+## End
+- [ ] Win / Loss
