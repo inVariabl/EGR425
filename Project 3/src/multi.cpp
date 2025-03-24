@@ -11,6 +11,7 @@ BLEService *pService;
 BLECharacteristic *pCharacteristic;
 bool deviceConnected = false;
 bool isPlayer1 = true; // Set to false for Device 2 (Player 2)
+bool opponentReady = false;
 
 // Seesaw Gamepad setup
 Adafruit_seesaw ss;
@@ -31,6 +32,15 @@ char hiddenGrid[GRID_SIZE][GRID_SIZE];
 int ships[] = {4, 3, 2};
 const int NUM_SHIPS = 3;
 
+struct Ship {
+  int x;          // Starting x position
+  int y;          // Starting y position
+  int length;     // Ship length
+  bool horizontal;// Orientation
+};
+
+Ship placedShips[NUM_SHIPS];  // Array to store all ship positions
+
 // Cursor position
 int cursorX = 0;
 int cursorY = 0;
@@ -46,13 +56,14 @@ void drawInitialGrid();
 void updateCell(int x, int y);
 void updateCursor();
 void placeShips();
-void processGuess();
+//void processGuess();
 bool canPlaceShip(int x, int y, int len, int dir);
 void sendMove(int x, int y, char result);
 void onReceive(BLECharacteristic* pCharacteristic);
 void handleTouch();
 void showPairingScreen();
 void placeShipsScreen();
+void waitForOpponentScreen();
 
 // BLE Server Callbacks
 class MyServerCallbacks : public BLEServerCallbacks {
@@ -68,10 +79,51 @@ class MyServerCallbacks : public BLEServerCallbacks {
   }
 };
 
-// BLE Characteristic Callbacks
+// check if a coordinate hits a ship
+char checkHit(int x, int y) {
+  for (int i = 0; i < NUM_SHIPS; i++) {
+    Ship ship = placedShips[i];
+    if (ship.horizontal) {
+      if (y == ship.y && x >= ship.x && x < ship.x + ship.length) {
+        return 'X';  // Hit
+      }
+    } else {
+      if (x == ship.x && y >= ship.y && y < ship.y + ship.length) {
+        return 'X';  // Hit
+      }
+    }
+  }
+  return 'O';  // Miss
+}
+
 class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* pCharacteristic) {
-    onReceive(pCharacteristic);
+    std::string value = pCharacteristic->getValue();
+    if (value == "READY") {
+      opponentReady = true;
+      Serial.println("Received READY from opponent");
+    } else if (value.substr(0, 6) == "GUESS:") {
+      // Handle guess request from opponent
+      int x = value[6] - '0';
+      int y = value[8] - '0';
+      char result = checkHit(x, y);
+      hiddenGrid[y][x] = result;  // Update our hidden grid with hit/miss
+      String response = String(x) + "," + String(y) + "," + (result == 'X' ? 'H' : 'O');
+      pCharacteristic->setValue(response.c_str());
+      pCharacteristic->notify();
+      Serial.println("Received guess: " + String(x) + "," + String(y) + " Result: " + (result == 'X' ? 'H' : 'O'));
+    } else {
+      // Existing move handling (opponent's confirmed hit/miss)
+      int x = value[0] - '0';
+      int y = value[2] - '0';
+      char result = value[4];
+      grid[y][x] = result;  // Update with 'H' or 'O'
+      if (result == 'H') {
+        hits++;
+        if (hits == totalHitsNeeded) gameOver = true;
+      }
+      updateCell(x, y);
+    }
   }
 };
 
@@ -92,26 +144,26 @@ void setup() {
   ss.pinModeBulk(button_mask, INPUT_PULLUP);
   ss.setGPIOInterrupts(button_mask, 1);
 
-  /*
-  // Initialize BLE
-  BLEDevice::init(isPlayer1 ? "M5Core2_Player1" : "M5Core2_Player2");
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
-  pService = pServer->createService(SERVICE_UUID);
-  pCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_UUID,
-                      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
-                    );
-  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
-  pService->start();
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->start();
-  Serial.println("BLE initialized. Waiting for connection...");
+  // // Initialize BLE (uncommented for full functionality)
+  // BLEDevice::init(isPlayer1 ? "M5Core2_Player1" : "M5Core2_Player2");
+  // pServer = BLEDevice::createServer();
+  // pServer->setCallbacks(new MyServerCallbacks());
+  // pService = pServer->createService(SERVICE_UUID);
+  // pCharacteristic = pService->createCharacteristic(
+  //                     CHARACTERISTIC_UUID,
+  //                     NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
+  //                   );
+  // pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+  // pService->start();
+  // BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  // pAdvertising->addServiceUUID(SERVICE_UUID);
+  // pAdvertising->start();
+  // Serial.println("BLE initialized. Waiting for connection...");
 
-  // Show pairing screen and wait for connection
   // showPairingScreen();
-  */
+
+  //opponentReady = false;
+  opponentReady = true;
 
   // Initialize grids
   for (int i = 0; i < GRID_SIZE; i++) {
@@ -121,8 +173,7 @@ void setup() {
     }
   }
 
-  // Replace random ship placement with interactive placement
-  placeShipsScreen();
+  //placeShipsScreen();
 
   drawInitialGrid();
   updateCursor();
@@ -131,14 +182,15 @@ void setup() {
 void loop() {
   M5.update();
 
-  if (!gameOver && deviceConnected) {
-    // Read joystick values
+  // Simplified for testing cursor movement - remove conditions for now
+  // if (!gameOver && deviceConnected && opponentReady) {
+    // Handle joystick input
     int16_t joyX = 1023 - ss.analogRead(JOYSTICK_X_PIN);
     int16_t joyY = 1023 - ss.analogRead(JOYSTICK_Y_PIN);
     uint32_t buttons = ss.digitalReadBulk(button_mask);
     bool buttonA = !(buttons & (1UL << BUTTON_A_PIN));
 
-    // Move cursor
+    // Move cursor with joystick
     int newCursorX = cursorX;
     int newCursorY = cursorY;
     if (joyX > 512 + 100) newCursorX = (cursorX + 1) % GRID_SIZE;
@@ -150,20 +202,37 @@ void loop() {
       cursorX = newCursorX;
       cursorY = newCursorY;
       updateCursor();
-      delay(200);
+      delay(150);  // Small debounce for joystick movement
     }
 
-    // Confirm guess with button A
-    if (buttonA) {
-      processGuess();
-      updateCell(cursorX, cursorY);
-      sendMove(cursorX, cursorY, grid[cursorY][cursorX]);
-      delay(200);
-    }
-  }
+    // Handle touchscreen input for cursor movement
+    static bool wasTouching = false;
+    bool isTouching = M5.Touch.getCount() > 0;
 
-  // Handle touch input
-  handleTouch();
+    if (isTouching) {
+      auto touchPoint = M5.Touch.getDetail(0);
+      int touchX = constrain(touchPoint.x / CELL_SIZE, 0, GRID_SIZE - 1);
+      int touchY = constrain(touchPoint.y / CELL_SIZE, 0, GRID_SIZE - 1);
+      if (touchX != cursorX || touchY != cursorY) {
+        cursorX = touchX;
+        cursorY = touchY;
+        updateCursor();
+      }
+    }
+
+    // Confirm shot with Button A or touch release (for testing)
+    static bool lastButtonA = false;
+    if ((buttonA && !lastButtonA) || (!isTouching && wasTouching)) {
+      if (grid[cursorY][cursorX] == ' ') {  // Only process if square is empty
+        grid[cursorY][cursorX] = 'X';  // Mark as unconfirmed shot
+        updateCell(cursorX, cursorY);
+        if (deviceConnected) sendMove(cursorX, cursorY, 'X');  // Send guess to opponent
+        delay(200);  // Debounce for button/touch
+      }
+    }
+    lastButtonA = buttonA;  // Update last state for edge detection
+    wasTouching = isTouching;  // Update touch state
+  // }
 }
 
 // Draw the initial grid
@@ -190,11 +259,16 @@ void updateCell(int x, int y) {
   int pixelY = y * CELL_SIZE;
   M5.Lcd.fillRect(pixelX + 1, pixelY + 1, CELL_SIZE - 2, CELL_SIZE - 2, BLACK);
   M5.Lcd.drawRect(pixelX, pixelY, CELL_SIZE, CELL_SIZE, WHITE);
-  if (grid[y][x] == 'X') {
+
+  if (grid[y][x] == 'X') {  // Unconfirmed shot
+    M5.Lcd.drawLine(pixelX + 5, pixelY + 5, pixelX + CELL_SIZE - 5, pixelY + CELL_SIZE - 5, GREEN);
+    M5.Lcd.drawLine(pixelX + CELL_SIZE - 5, pixelY + 5, pixelX + 5, pixelY + CELL_SIZE - 5, GREEN);
+  } else if (grid[y][x] == 'O') {  // Confirmed miss
+    M5.Lcd.fillCircle(pixelX + CELL_SIZE / 2, pixelY + CELL_SIZE / 2, CELL_SIZE / 4, WHITE);
+  } else if (grid[y][x] == 'H') {  // Confirmed hit
     M5.Lcd.fillRect(pixelX + 5, pixelY + 5, CELL_SIZE - 10, CELL_SIZE - 10, RED);
-  } else if (grid[y][x] == 'O') {
-    M5.Lcd.fillCircle(pixelX + CELL_SIZE / 2, pixelY + CELL_SIZE / 2, CELL_SIZE / 4, BLUE);
   }
+
   if (gameOver) {
     M5.Lcd.setCursor(10, GRID_SIZE * CELL_SIZE + 10);
     M5.Lcd.setTextColor(GREEN);
@@ -253,22 +327,16 @@ bool canPlaceShip(int x, int y, int len, int dir) {
   return true;
 }
 
-// Process a guess
-void processGuess() {
-  if (grid[cursorY][cursorX] != ' ') return;
-  if (hiddenGrid[cursorY][cursorX] == 'S') {
-    grid[cursorY][cursorX] = 'X';
-    hits++;
-    if (hits == totalHitsNeeded) gameOver = true;
-  } else {
-    grid[cursorY][cursorX] = 'O';
-  }
-}
+// No longer needed
+// void processGuess() {
+//   if (grid[cursorY][cursorX] != ' ') return;
+//   grid[cursorY][cursorX] = '?';  // Temporary marker for guess awaiting confirmation
+// }
 
-// Send move data over BLE
 void sendMove(int x, int y, char result) {
-  String moveData = String(x) + "," + String(y) + "," + String(result);
-  pCharacteristic->setValue(moveData.c_str());
+  // Send guess request to opponent
+  String guessData = "GUESS:" + String(x) + "," + String(y);
+  pCharacteristic->setValue(guessData.c_str());
   pCharacteristic->notify();
 }
 
@@ -292,7 +360,7 @@ void handleTouch() {
       cursorX = newCursorX;
       cursorY = newCursorY;
       updateCursor();
-      processGuess();
+      //processGuess();
       updateCell(cursorX, cursorY);
       sendMove(cursorX, cursorY, grid[cursorY][cursorX]);
     }
@@ -357,7 +425,6 @@ void showPairingScreen() {
   }
 }
 
-// Screen for manually placing ships with red markers for placed ships
 void placeShipsScreen() {
   M5.Lcd.fillScreen(BLACK);
   drawInitialGrid();  // Draw empty grid
@@ -454,6 +521,12 @@ void placeShipsScreen() {
                          CELL_SIZE - 10, CELL_SIZE - 10, RED);
         }
       }
+      // Store ship position
+      placedShips[currentShip].x = shipX;
+      placedShips[currentShip].y = shipY;
+      placedShips[currentShip].length = ships[currentShip];
+      placedShips[currentShip].horizontal = horizontal;
+
       currentShip++;
       shipX = 0;
       shipY = 0;
@@ -466,4 +539,37 @@ void placeShipsScreen() {
 
   // Clear instructions
   M5.Lcd.fillRect(0, GRID_SIZE * CELL_SIZE, M5.Lcd.width(), M5.Lcd.height() - GRID_SIZE * CELL_SIZE, BLACK);
+
+  // Send READY message to opponent
+  if (deviceConnected) {
+    pCharacteristic->setValue("READY");
+    pCharacteristic->notify();
+    Serial.println("Sent READY to opponent");
+  }
+
+  // Show waiting screen until opponent is ready
+  waitForOpponentScreen();
+}
+
+// Waiting screen for opponent's ready signal
+void waitForOpponentScreen() {
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setTextColor(WHITE);
+
+  const char* waitingText = "Awaiting Opponent...";
+  int textWidth = strlen(waitingText) * 12;  // 6 pixels per char * textSize
+  int textHeight = 16;  // 8 pixels * textSize
+  int x = (M5.Lcd.width() - textWidth) / 2;
+  int y = (M5.Lcd.height() - textHeight) / 2;
+
+  M5.Lcd.setCursor(x, y);
+  M5.Lcd.print(waitingText);
+
+  while (!opponentReady) {
+    delay(100);  // Wait for opponent to send READY
+  }
+
+  // Clear screen before game starts
+  M5.Lcd.fillScreen(BLACK);
 }
