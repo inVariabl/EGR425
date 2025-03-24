@@ -1,17 +1,45 @@
 #include <M5Unified.h>
-//#include <NimBLEDevice.h>
+//#include <NimBLEDevice.h>  // Comment out actual BLE for simulation
 #include "Adafruit_seesaw.h"
 
-// BLE Setup (commented out)
-//#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-//#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+// BLE Setup (simulated)
+#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-//BLEServer *pServer;
-//BLEService *pService;
-//BLECharacteristic *pCharacteristic;
-bool deviceConnected = false;  // Set to true for testing without BLE
-bool isPlayer1 = true;         // Still used for win/lose message
-bool opponentReady = true;     // Set to true for testing without BLE
+// Simulated BLE objects (no actual BLE library needed)
+class BLECharacteristic {
+public:
+  void setValue(const char* value) { lastValue = String(value); }
+  void notify() { Serial.println("Simulated notify: " + lastValue); }
+  String getValue() { return lastValue; }
+private:
+  String lastValue;
+};
+
+class BLEService {
+public:
+  BLECharacteristic* createCharacteristic(const char*, int) { return &characteristic; }
+  void start() {}
+private:
+  BLECharacteristic characteristic;
+};
+
+class BLEServer {
+public:
+  BLEService* createService(const char*) { return &service; }
+  void setCallbacks(void*) {}
+  void startAdvertising() {}
+private:
+  BLEService service;
+};
+
+BLEServer *pServer = new BLEServer();
+BLEService *pService;
+BLECharacteristic *pCharacteristic;
+bool deviceConnected = false;
+bool isPlayer1 = true; // Test as Player 1; toggle to false to simulate Player 2
+bool opponentReady = false;
+bool localReady = false;
 
 // Seesaw Gamepad setup
 Adafruit_seesaw ss;
@@ -19,7 +47,7 @@ Adafruit_seesaw ss;
 #define JOYSTICK_X_PIN 14
 #define JOYSTICK_Y_PIN 15
 #define BUTTON_A_PIN 5
-#define BUTTON_B_PIN 6
+#define BUTTON_B_PIN 6  // Pin 6 = X button
 uint32_t button_mask = (1UL << BUTTON_A_PIN) | (1UL << BUTTON_B_PIN);
 
 // Grid settings
@@ -51,47 +79,54 @@ int totalHitsNeeded = 9;
 bool gameOver = false;
 bool gridDrawn = false;
 
+// Simulated opponent state
+char opponentGrid[GRID_SIZE][GRID_SIZE]; // Fake opponent's hidden grid
+Ship opponentShips[NUM_SHIPS] = {{0, 0, 4, true}, {2, 2, 3, false}, {5, 5, 2, true}}; // Predefined opponent ships
+
 // Function declarations
 void drawInitialGrid();
 void updateCell(int x, int y);
 void updateCursor();
 bool canPlaceShip(int x, int y, int len, int dir);
-//void sendMove(int x, int y, char result);
-void handleTouch();
+void sendMove(int x, int y, char result);
 void placeShipsScreen();
 void waitForOpponentScreen();
 char checkHit(int x, int y);
+char checkOpponentHit(int x, int y); // Simulate opponent's hit check
 
-// BLE Server Callbacks (commented out)
-/*
-class MyServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer* pServer) {
+// Simulated BLE Callbacks
+class MyServerCallbacks {
+public:
+  void onConnect() {
     deviceConnected = true;
-    Serial.println("Device connected");
+    Serial.println("Simulated device connected");
   }
-
-  void onDisconnect(BLEServer* pServer) {
+  void onDisconnect() {
     deviceConnected = false;
-    Serial.println("Device disconnected");
-    pServer->startAdvertising();
+    opponentReady = false;
+    localReady = false;
+    Serial.println("Simulated device disconnected");
   }
 };
 
-class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* pCharacteristic) {
-    std::string value = pCharacteristic->getValue();
+class MyCharacteristicCallbacks {
+public:
+  void onWrite(BLECharacteristic* pChar) {
+    std::string value = pChar->getValue().c_str();
     if (value == "READY") {
       opponentReady = true;
-      Serial.println("Received READY from opponent");
+      Serial.println("Simulated received READY from opponent");
     } else if (value.substr(0, 6) == "GUESS:") {
       int x = value[6] - '0';
       int y = value[8] - '0';
       char result = checkHit(x, y);
       hiddenGrid[y][x] = result;
       String response = String(x) + "," + String(y) + "," + (result == 'X' ? 'H' : 'O');
-      pCharacteristic->setValue(response.c_str());
-      pCharacteristic->notify();
-      Serial.println("Received guess: " + String(x) + "," + String(y) + " Result: " + (result == 'X' ? 'H' : 'O'));
+      pChar->setValue(response.c_str());
+      pChar->notify();
+      Serial.println("Simulated received guess: " + String(x) + "," + String(y) + " Result: " + (result == 'X' ? 'H' : 'O'));
+      // Simulate opponent guessing back
+      simulateOpponentGuess();
     } else {
       int x = value[0] - '0';
       int y = value[2] - '0';
@@ -102,10 +137,28 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
         if (hits == totalHitsNeeded) gameOver = true;
       }
       updateCell(x, y);
+      Serial.print("Shot confirmed at: ("); Serial.print(x); Serial.print(", "); Serial.print(y);
+      Serial.print(") - "); Serial.println(result == 'H' ? "Hit" : "Miss");
     }
   }
+
+  void simulateOpponentGuess() {
+    int x = random(GRID_SIZE);
+    int y = random(GRID_SIZE);
+    while (grid[y][x] != ' ') { // Find an unguessed spot
+      x = random(GRID_SIZE);
+      y = random(GRID_SIZE);
+    }
+    char result = checkOpponentHit(x, y);
+    String response = String(x) + "," + String(y) + "," + (result == 'X' ? 'H' : 'O');
+    pCharacteristic->setValue(response.c_str());
+    pCharacteristic->notify();
+    Serial.println("Simulated opponent guess: " + String(x) + "," + String(y) + " Result: " + (result == 'X' ? 'H' : 'O'));
+  }
 };
-*/
+
+MyServerCallbacks serverCallbacks;
+MyCharacteristicCallbacks charCallbacks;
 
 void setup() {
   M5.begin();
@@ -114,7 +167,7 @@ void setup() {
 
   Serial.begin(115200);
   while (!Serial) delay(10);
-  Serial.println("Starting Battleship...");
+  Serial.println("Starting Battleship with simulated BLE...");
 
   // Initialize Seesaw Gamepad
   if (!ss.begin(SEESAW_ADDR)) {
@@ -124,38 +177,50 @@ void setup() {
   ss.pinModeBulk(button_mask, INPUT_PULLUP);
   ss.setGPIOInterrupts(button_mask, 1);
 
-  // BLE initialization commented out
-  /*
-  BLEDevice::init(isPlayer1 ? "M5Core2_Player1" : "M5Core2_Player2");
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
+  // Simulated BLE initialization
   pService = pServer->createService(SERVICE_UUID);
-  pCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_UUID,
-                      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
-                    );
-  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
-  pService->start();
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->start();
-  Serial.println("BLE initialized. Waiting for connection...");
-  showPairingScreen();
-  */
+  pCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID, 0);
+  Serial.println("Simulated BLE initialized. Simulating connection...");
 
-  opponentReady = true;  // For testing
-  deviceConnected = true;  // For testing
+  // Simulate connection after a delay
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.setTextColor(BLUE);
+  M5.Lcd.setCursor(10, M5.Lcd.height() / 2 - 8);
+  M5.Lcd.print("Simulating connection...");
+  delay(2000); // Pretend to wait for connection
+  serverCallbacks.onConnect();
+
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.setTextColor(GREEN);
+  M5.Lcd.setCursor(10, M5.Lcd.height() / 2 - 8);
+  M5.Lcd.print("Connected!");
+  delay(2000);
 
   // Initialize grids
   for (int i = 0; i < GRID_SIZE; i++) {
     for (int j = 0; j < GRID_SIZE; j++) {
       grid[i][j] = ' ';
       hiddenGrid[i][j] = ' ';
+      opponentGrid[i][j] = ' '; // Initialize opponent's grid
     }
   }
 
+  // Place opponent's ships in simulated grid
+  for (int s = 0; s < NUM_SHIPS; s++) {
+    Ship ship = opponentShips[s];
+    for (int i = 0; i < ship.length; i++) {
+      if (ship.horizontal) opponentGrid[ship.y][ship.x + i] = 'S';
+      else opponentGrid[ship.y + i][ship.x] = 'S';
+    }
+  }
+
+  // Move to ship placement
   placeShipsScreen();
 
+  // Wait for both players to be ready
+  waitForOpponentScreen();
+
+  // Start main game
   drawInitialGrid();
   updateCursor();
 }
@@ -163,14 +228,12 @@ void setup() {
 void loop() {
   M5.update();
 
-  if (!gameOver) {  // Simplified condition for testing
-    // Handle joystick input
+  if (!gameOver && deviceConnected && opponentReady && localReady) {
     int16_t joyX = 1023 - ss.analogRead(JOYSTICK_X_PIN);
     int16_t joyY = 1023 - ss.analogRead(JOYSTICK_Y_PIN);
     uint32_t buttons = ss.digitalReadBulk(button_mask);
     bool buttonA = !(buttons & (1UL << BUTTON_A_PIN));
 
-    // Move cursor with joystick
     int newCursorX = cursorX;
     int newCursorY = cursorY;
     if (joyX > 512 + 100) newCursorX = (cursorX + 1) % GRID_SIZE;
@@ -182,10 +245,9 @@ void loop() {
       cursorX = newCursorX;
       cursorY = newCursorY;
       updateCursor();
-      delay(150);  // Small debounce for joystick movement
+      delay(150);
     }
 
-    // Handle touchscreen input for cursor movement
     static bool wasTouching = false;
     bool isTouching = M5.Touch.getCount() > 0;
 
@@ -200,23 +262,14 @@ void loop() {
       }
     }
 
-    // Confirm shot with Button A or touch release
     static bool lastButtonA = false;
     if ((buttonA && !lastButtonA) || (!isTouching && wasTouching)) {
-      if (grid[cursorY][cursorX] == ' ') {  // Only process if square is empty
-        grid[cursorY][cursorX] = 'X';  // Mark as unconfirmed shot
+      if (grid[cursorY][cursorX] == ' ') {
+        grid[cursorY][cursorX] = 'X';
         updateCell(cursorX, cursorY);
-
-        // Simulate opponent response for testing
-        char result = checkHit(cursorX, cursorY);
-        grid[cursorY][cursorX] = (result == 'X' ? 'H' : 'O');
-        if (result == 'X') {
-          hits++;
-          if (hits == totalHitsNeeded) gameOver = true;
-        }
-        updateCell(cursorX, cursorY);
-
-        delay(200);  // Debounce for button/touch
+        sendMove(cursorX, cursorY, 'X');
+        Serial.print("Shot sent at: ("); Serial.print(cursorX); Serial.print(", "); Serial.print(cursorY); Serial.println(")");
+        delay(200);
       }
     }
     lastButtonA = buttonA;
@@ -252,12 +305,12 @@ void updateCell(int x, int y) {
   M5.Lcd.fillRect(pixelX + 1, pixelY + 1, CELL_SIZE - 2, CELL_SIZE - 2, BLACK);
   M5.Lcd.drawRect(pixelX, pixelY, CELL_SIZE, CELL_SIZE, WHITE);
 
-  if (grid[y][x] == 'X') {  // Unconfirmed shot
+  if (grid[y][x] == 'X') {
     M5.Lcd.drawLine(pixelX + 5, pixelY + 5, pixelX + CELL_SIZE - 5, pixelY + CELL_SIZE - 5, GREEN);
     M5.Lcd.drawLine(pixelX + CELL_SIZE - 5, pixelY + 5, pixelX + 5, pixelY + CELL_SIZE - 5, GREEN);
-  } else if (grid[y][x] == 'O') {  // Confirmed miss
+  } else if (grid[y][x] == 'O') {
     M5.Lcd.fillCircle(pixelX + CELL_SIZE / 2, pixelY + CELL_SIZE / 2, CELL_SIZE / 4, WHITE);
-  } else if (grid[y][x] == 'H') {  // Confirmed hit
+  } else if (grid[y][x] == 'H') {
     M5.Lcd.fillRect(pixelX + 5, pixelY + 5, CELL_SIZE - 10, CELL_SIZE - 10, RED);
   }
 
@@ -299,121 +352,48 @@ bool canPlaceShip(int x, int y, int len, int dir) {
   return true;
 }
 
-// Check if a coordinate hits a ship
+// Check if a coordinate hits a local ship
 char checkHit(int x, int y) {
   for (int i = 0; i < NUM_SHIPS; i++) {
     Ship ship = placedShips[i];
     if (ship.horizontal) {
       if (y == ship.y && x >= ship.x && x < ship.x + ship.length) {
-        return 'X';  // Hit
+        return 'X';
       }
     } else {
       if (x == ship.x && y >= ship.y && y < ship.y + ship.length) {
-        return 'X';  // Hit
+        return 'X';
       }
     }
   }
-  return 'O';  // Miss
+  return 'O';
 }
 
-// Commented out BLE send function
-/*
+// Check if a coordinate hits an opponent's ship (simulated)
+char checkOpponentHit(int x, int y) {
+  if (opponentGrid[y][x] == 'S') return 'X';
+  return 'O';
+}
+
 void sendMove(int x, int y, char result) {
   String guessData = "GUESS:" + String(x) + "," + String(y);
   pCharacteristic->setValue(guessData.c_str());
   pCharacteristic->notify();
+  // Immediately simulate opponent's response
+  charCallbacks.onWrite(pCharacteristic);
 }
-*/
-
-void handleTouch() {
-  if (M5.Touch.getCount() > 0) {
-    auto touchPoint = M5.Touch.getDetail(0);
-    int newCursorX = constrain(touchPoint.x / CELL_SIZE, 0, GRID_SIZE - 1);
-    int newCursorY = constrain(touchPoint.y / CELL_SIZE, 0, GRID_SIZE - 1);
-
-    if (newCursorX != cursorX || newCursorY != cursorY) {
-      cursorX = newCursorX;
-      cursorY = newCursorY;
-      updateCursor();
-      updateCell(cursorX, cursorY);
-      //sendMove(cursorX, cursorY, grid[cursorY][cursorX]);
-    }
-  }
-}
-
-// Commented out BLE pairing screen
-/*
-void showPairingScreen() {
-  bool wasConnected = false;
-  M5.Lcd.fillScreen(BLACK);
-
-  const char* baseText = "Searching";
-  int dotCount = 0;
-  unsigned long lastUpdate = millis();
-  const int animationDelay = 500;
-
-  while (!deviceConnected) {
-    if (millis() - lastUpdate >= animationDelay) {
-      M5.Lcd.fillScreen(BLACK);
-      M5.Lcd.setTextSize(2);
-      M5.Lcd.setTextColor(BLUE);
-
-      char displayText[13];
-      strcpy(displayText, baseText);
-      for (int i = 0; i < dotCount; i++) {
-        displayText[9 + i] = '.';
-      }
-      displayText[9 + dotCount] = '\0';
-
-      int textWidth = strlen(displayText) * 12;
-      int textHeight = 16;
-      int x = (M5.Lcd.width() - textWidth) / 2;
-      int y = (M5.Lcd.height() - textHeight) / 2;
-
-      M5.Lcd.setCursor(x, y);
-      M5.Lcd.print(displayText);
-
-      dotCount = (dotCount + 1) % 4;
-      lastUpdate = millis();
-    }
-
-    if (deviceConnected && !wasConnected) {
-      M5.Lcd.fillScreen(BLACK);
-      M5.Lcd.setTextColor(GREEN);
-      const char* connected = "Connected!";
-      int textWidth = strlen(connected) * 12;
-      int textHeight = 16;
-      int x = (M5.Lcd.width() - textWidth) / 2;
-      int y = (M5.Lcd.height() - textHeight) / 2;
-      M5.Lcd.setCursor(x, y);
-      M5.Lcd.print(connected);
-      delay(2000);
-      wasConnected = true;
-    }
-
-    delay(10);
-  }
-}
-*/
 
 void placeShipsScreen() {
   M5.Lcd.fillScreen(BLACK);
-  drawInitialGrid();  // Draw empty grid
+  drawInitialGrid();
 
   int currentShip = 0;
-  int shipX = 0, shipY = 0;  // Starting position
-  bool horizontal = true;    // Ship orientation (true = horizontal, false = vertical)
-
-  // Debug initial setup
-  Serial.println("Starting ship placement...");
-  Serial.print("Button A pin: "); Serial.println(BUTTON_A_PIN);
-  Serial.print("Button B pin: "); Serial.println(BUTTON_B_PIN);
-  Serial.print("Button mask: "); Serial.println(button_mask, BIN);
+  int shipX = 0, shipY = 0;
+  bool horizontal = true;
 
   while (currentShip < NUM_SHIPS) {
     M5.update();
 
-    // Draw already placed ships in red
     for (int y = 0; y < GRID_SIZE; y++) {
       for (int x = 0; x < GRID_SIZE; x++) {
         if (hiddenGrid[y][x] == 'S') {
@@ -423,14 +403,12 @@ void placeShipsScreen() {
       }
     }
 
-    // Draw current ship placement preview
     M5.Lcd.setTextSize(1);
     M5.Lcd.setTextColor(WHITE);
     M5.Lcd.setCursor(10, GRID_SIZE * CELL_SIZE + 10);
     M5.Lcd.printf("Place ship %d (size %d) - A to confirm, X to rotate",
-                  currentShip + 1, ships[currentShip]);  // Updated text to reflect X
+                  currentShip + 1, ships[currentShip]);
 
-    // Preview current ship placement in yellow
     bool canPlace = canPlaceShip(shipX, shipY, ships[currentShip], horizontal ? 0 : 1);
     for (int i = 0; i < ships[currentShip]; i++) {
       int previewX = horizontal ? shipX + i : shipX;
@@ -441,22 +419,12 @@ void placeShipsScreen() {
       }
     }
 
-    // Handle joystick input
     int16_t joyX = 1023 - ss.analogRead(JOYSTICK_X_PIN);
     int16_t joyY = 1023 - ss.analogRead(JOYSTICK_Y_PIN);
     uint32_t buttons = ss.digitalReadBulk(button_mask);
-    bool buttonA = !(buttons & (1UL << BUTTON_A_PIN));  // Pin 5 (A)
-    bool buttonX = !(buttons & (1UL << BUTTON_B_PIN));  // Pin 6 (X, labeled as B in code)
+    bool buttonA = !(buttons & (1UL << BUTTON_A_PIN));
+    bool buttonX = !(buttons & (1UL << BUTTON_B_PIN));
 
-    // Debug button states
-    static bool lastButtonA = false;
-    static bool lastButtonX = false;
-    if (buttonA && !lastButtonA) Serial.println("Button A pressed (Pin 5)");
-    if (buttonX && !lastButtonX) Serial.println("Button X pressed (Pin 6)");
-    lastButtonA = buttonA;
-    lastButtonX = buttonX;
-
-    // Move ship position
     int newShipX = shipX;
     int newShipY = shipY;
     if (joyX > 512 + 100) newShipX = min(shipX + 1, GRID_SIZE - (horizontal ? ships[currentShip] : 1));
@@ -467,10 +435,9 @@ void placeShipsScreen() {
     if (newShipX != shipX || newShipY != shipY) {
       shipX = newShipX;
       shipY = newShipY;
-      drawInitialGrid();  // Redraw grid to clear previous preview
+      drawInitialGrid();
     }
 
-    // Handle touch input
     if (M5.Touch.getCount() > 0) {
       auto touch = M5.Touch.getDetail(0);
       shipX = constrain(touch.x / CELL_SIZE, 0, GRID_SIZE - (horizontal ? ships[currentShip] : 1));
@@ -478,29 +445,21 @@ void placeShipsScreen() {
       drawInitialGrid();
     }
 
-    // Rotate ship with Button X (Pin 6, previously labeled as B)
-    static bool lastButtonXState = false;
-    if (buttonX && !lastButtonXState) {  // Detect rising edge
+    static bool lastButtonX = false;
+    if (buttonX && !lastButtonX) {
       horizontal = !horizontal;
-      // Adjust position to fit within grid after rotation
-      if (horizontal) {
-        if (shipX + ships[currentShip] > GRID_SIZE) {
-          shipX = GRID_SIZE - ships[currentShip];
-        }
-      } else {
-        if (shipY + ships[currentShip] > GRID_SIZE) {
-          shipY = GRID_SIZE - ships[currentShip];
-        }
+      if (horizontal && shipX + ships[currentShip] > GRID_SIZE) {
+        shipX = GRID_SIZE - ships[currentShip];
       }
-      drawInitialGrid();  // Redraw grid to show new orientation
-      Serial.print("Rotated to: "); Serial.println(horizontal ? "Horizontal" : "Vertical");
-      delay(200);  // Debounce
+      if (!horizontal && shipY + ships[currentShip] > GRID_SIZE) {
+        shipY = GRID_SIZE - ships[currentShip];
+      }
+      drawInitialGrid();
+      delay(200);
     }
-    lastButtonXState = buttonX;
+    lastButtonX = buttonX;
 
-    // Confirm placement with Button A
     if (buttonA && canPlaceShip(shipX, shipY, ships[currentShip], horizontal ? 0 : 1)) {
-      // Place ship in hiddenGrid and mark with red
       for (int i = 0; i < ships[currentShip]; i++) {
         if (horizontal) {
           hiddenGrid[shipY][shipX + i] = 'S';
@@ -512,7 +471,6 @@ void placeShipsScreen() {
                          CELL_SIZE - 10, CELL_SIZE - 10, RED);
         }
       }
-      // Store ship position
       placedShips[currentShip].x = shipX;
       placedShips[currentShip].y = shipY;
       placedShips[currentShip].length = ships[currentShip];
@@ -522,15 +480,24 @@ void placeShipsScreen() {
       shipX = 0;
       shipY = 0;
       horizontal = true;
-      drawInitialGrid();  // Clear preview after placement
-      delay(200);  // Small delay to show placement
+      drawInitialGrid();
+      delay(200);
     }
 
-    delay(100);  // General debounce
+    delay(100);
   }
 
   M5.Lcd.fillRect(0, GRID_SIZE * CELL_SIZE, M5.Lcd.width(), M5.Lcd.height() - GRID_SIZE * CELL_SIZE, BLACK);
-  waitForOpponentScreen();
+
+  if (deviceConnected) {
+    pCharacteristic->setValue("READY");
+    pCharacteristic->notify();
+    localReady = true;
+    Serial.println("Sent READY to simulated opponent");
+    // Simulate opponent READY after a delay
+    delay(2000); // Pretend opponent takes 2 seconds to place ships
+    charCallbacks.onWrite(pCharacteristic); // Trigger READY callback
+  }
 }
 
 void waitForOpponentScreen() {
@@ -538,7 +505,7 @@ void waitForOpponentScreen() {
   M5.Lcd.setTextSize(2);
   M5.Lcd.setTextColor(WHITE);
 
-  const char* waitingText = "Starting Game...";  // Changed for single-device testing
+  const char* waitingText = "Waiting for opponent...";
   int textWidth = strlen(waitingText) * 12;
   int textHeight = 16;
   int x = (M5.Lcd.width() - textWidth) / 2;
@@ -547,6 +514,9 @@ void waitForOpponentScreen() {
   M5.Lcd.setCursor(x, y);
   M5.Lcd.print(waitingText);
 
-  delay(2000);  // Simulate wait, then proceed
+  while (!(localReady && opponentReady)) {
+    delay(100);
+  }
+
   M5.Lcd.fillScreen(BLACK);
 }
