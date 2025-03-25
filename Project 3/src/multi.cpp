@@ -1,3 +1,6 @@
+// Caleb Aragones, Kwang Hak Lee, Daniel Crooks
+// Project 3 3/24/25
+
 #include <M5Unified.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -578,7 +581,7 @@ void updateTurnDisplay() {
       M5.Lcd.print("Your Turn!");
     } else {
       M5.Lcd.setTextColor(YELLOW);
-      M5.Lcd.print("His Turn");
+      M5.Lcd.print("Opponent's Turn");
     }
   }
 }
