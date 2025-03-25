@@ -66,15 +66,16 @@ char checkHit(int x, int y);
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
     deviceConnected = true;
-    Serial.println("Device connected");
+    Serial.println("BLE: Device connected successfully");
   }
 
   void onDisconnect(BLEServer* pServer) {
     deviceConnected = false;
     opponentReady = false;
     localReady = false;
-    Serial.println("Device disconnected");
+    Serial.println("BLE: Device disconnected");
     pServer->startAdvertising();
+    Serial.println("BLE: Restarted advertising after disconnect");
   }
 };
 
@@ -83,7 +84,7 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
     std::string value = pCharacteristic->getValue();
     if (value == "READY") {
       opponentReady = true;
-      Serial.println("Received READY from opponent");
+      Serial.println("BLE: Received READY from opponent");
     } else if (value.substr(0, 6) == "GUESS:") {
       int x = value[6] - '0';
       int y = value[8] - '0';
@@ -92,7 +93,7 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
       String response = String(x) + "," + String(y) + "," + (result == 'X' ? 'H' : 'O');
       pCharacteristic->setValue(response.c_str());
       pCharacteristic->notify();
-      Serial.println("Received guess: " + String(x) + "," + String(y) + " Result: " + (result == 'X' ? 'H' : 'O'));
+      Serial.println("BLE: Received guess: " + String(x) + "," + String(y) + " Result: " + (result == 'X' ? 'H' : 'O'));
     } else {
       int x = value[0] - '0';
       int y = value[2] - '0';
@@ -103,7 +104,7 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
         if (hits == totalHitsNeeded) gameOver = true;
       }
       updateCell(x, y);
-      Serial.print("Shot confirmed at: ("); Serial.print(x); Serial.print(", "); Serial.print(y);
+      Serial.print("BLE: Shot confirmed at: ("); Serial.print(x); Serial.print(", "); Serial.print(y);
       Serial.print(") - "); Serial.println(result == 'H' ? "Hit" : "Miss");
     }
   }
@@ -125,30 +126,47 @@ void setup() {
   }
   ss.pinModeBulk(button_mask, INPUT_PULLUP);
   ss.setGPIOInterrupts(button_mask, 1);
+  Serial.println("Seesaw Gamepad initialized");
 
-  // Initialize BLE
+  // Initialize BLE with debug
+  Serial.println("BLE: Initializing device...");
   BLEDevice::init(isPlayer1 ? "M5Core2_Player1" : "M5Core2_Player2");
+  Serial.println("BLE: Device initialized as " + String(isPlayer1 ? "M5Core2_Player1" : "M5Core2_Player2"));
+
+  Serial.println("BLE: Creating server...");
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
+  Serial.println("BLE: Server created");
+
+  Serial.println("BLE: Creating service with UUID " + String(SERVICE_UUID));
   pService = pServer->createService(SERVICE_UUID);
+
+  Serial.println("BLE: Creating characteristic with UUID " + String(CHARACTERISTIC_UUID));
   pCharacteristic = pService->createCharacteristic(
                       CHARACTERISTIC_UUID,
                       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
                     );
   pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+  Serial.println("BLE: Characteristic created");
+
+  Serial.println("BLE: Starting service...");
   pService->start();
+  Serial.println("BLE: Service started");
+
+  Serial.println("BLE: Starting advertising...");
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
   pAdvertising->start();
-  Serial.println("BLE initialized. Waiting for connection...");
+  Serial.println("BLE: Advertising started. Waiting for connection...");
 
-  // Wait for connection
+  // Wait for connection with debug
   while (!deviceConnected) {
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setTextColor(BLUE);
     M5.Lcd.setCursor(10, M5.Lcd.height() / 2 - 8);
     M5.Lcd.print("Waiting for opponent...");
     delay(100);
+    Serial.println("BLE: Still waiting for connection...");
   }
 
   M5.Lcd.fillScreen(BLACK);
