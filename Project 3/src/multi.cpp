@@ -1,43 +1,16 @@
 #include <M5Unified.h>
-//#include <NimBLEDevice.h>  // Comment out actual BLE for simulation
+#include <NimBLEDevice.h>
 #include "Adafruit_seesaw.h"
 
-// BLE Setup (simulated)
+// BLE Setup
 #define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-// Simulated BLE objects (no actual BLE library needed)
-class BLECharacteristic {
-public:
-  void setValue(const char* value) { lastValue = String(value); }
-  void notify() { Serial.println("Simulated notify: " + lastValue); }
-  String getValue() { return lastValue; }
-private:
-  String lastValue;
-};
-
-class BLEService {
-public:
-  BLECharacteristic* createCharacteristic(const char*, int) { return &characteristic; }
-  void start() {}
-private:
-  BLECharacteristic characteristic;
-};
-
-class BLEServer {
-public:
-  BLEService* createService(const char*) { return &service; }
-  void setCallbacks(void*) {}
-  void startAdvertising() {}
-private:
-  BLEService service;
-};
-
-BLEServer *pServer = new BLEServer();
+BLEServer *pServer;
 BLEService *pService;
 BLECharacteristic *pCharacteristic;
 bool deviceConnected = false;
-bool isPlayer1 = true; // Test as Player 1; toggle to false to simulate Player 2
+bool isPlayer1 = true; // Set to false for Player 2
 bool opponentReady = false;
 bool localReady = false;
 
@@ -47,7 +20,7 @@ Adafruit_seesaw ss;
 #define JOYSTICK_X_PIN 14
 #define JOYSTICK_Y_PIN 15
 #define BUTTON_A_PIN 5
-#define BUTTON_B_PIN 6  // Pin 6 = X button
+#define BUTTON_B_PIN 6  // Pin 6 = Button X
 uint32_t button_mask = (1UL << BUTTON_A_PIN) | (1UL << BUTTON_B_PIN);
 
 // Grid settings
@@ -79,10 +52,6 @@ int totalHitsNeeded = 9;
 bool gameOver = false;
 bool gridDrawn = false;
 
-// Simulated opponent state
-char opponentGrid[GRID_SIZE][GRID_SIZE]; // Fake opponent's hidden grid
-Ship opponentShips[NUM_SHIPS] = {{0, 0, 4, true}, {2, 2, 3, false}, {5, 5, 2, true}}; // Predefined opponent ships
-
 // Function declarations
 void drawInitialGrid();
 void updateCell(int x, int y);
@@ -92,41 +61,38 @@ void sendMove(int x, int y, char result);
 void placeShipsScreen();
 void waitForOpponentScreen();
 char checkHit(int x, int y);
-char checkOpponentHit(int x, int y); // Simulate opponent's hit check
 
-// Simulated BLE Callbacks
-class MyServerCallbacks {
-public:
-  void onConnect() {
+// BLE Server Callbacks
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
     deviceConnected = true;
-    Serial.println("Simulated device connected");
+    Serial.println("Device connected");
   }
-  void onDisconnect() {
+
+  void onDisconnect(BLEServer* pServer) {
     deviceConnected = false;
     opponentReady = false;
     localReady = false;
-    Serial.println("Simulated device disconnected");
+    Serial.println("Device disconnected");
+    pServer->startAdvertising();
   }
 };
 
-class MyCharacteristicCallbacks {
-public:
-  void onWrite(BLECharacteristic* pChar) {
-    std::string value = pChar->getValue().c_str();
+class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* pCharacteristic) {
+    std::string value = pCharacteristic->getValue();
     if (value == "READY") {
       opponentReady = true;
-      Serial.println("Simulated received READY from opponent");
+      Serial.println("Received READY from opponent");
     } else if (value.substr(0, 6) == "GUESS:") {
       int x = value[6] - '0';
       int y = value[8] - '0';
       char result = checkHit(x, y);
       hiddenGrid[y][x] = result;
       String response = String(x) + "," + String(y) + "," + (result == 'X' ? 'H' : 'O');
-      pChar->setValue(response.c_str());
-      pChar->notify();
-      Serial.println("Simulated received guess: " + String(x) + "," + String(y) + " Result: " + (result == 'X' ? 'H' : 'O'));
-      // Simulate opponent guessing back
-      simulateOpponentGuess();
+      pCharacteristic->setValue(response.c_str());
+      pCharacteristic->notify();
+      Serial.println("Received guess: " + String(x) + "," + String(y) + " Result: " + (result == 'X' ? 'H' : 'O'));
     } else {
       int x = value[0] - '0';
       int y = value[2] - '0';
@@ -141,24 +107,7 @@ public:
       Serial.print(") - "); Serial.println(result == 'H' ? "Hit" : "Miss");
     }
   }
-
-  void simulateOpponentGuess() {
-    int x = random(GRID_SIZE);
-    int y = random(GRID_SIZE);
-    while (grid[y][x] != ' ') { // Find an unguessed spot
-      x = random(GRID_SIZE);
-      y = random(GRID_SIZE);
-    }
-    char result = checkOpponentHit(x, y);
-    String response = String(x) + "," + String(y) + "," + (result == 'X' ? 'H' : 'O');
-    pCharacteristic->setValue(response.c_str());
-    pCharacteristic->notify();
-    Serial.println("Simulated opponent guess: " + String(x) + "," + String(y) + " Result: " + (result == 'X' ? 'H' : 'O'));
-  }
 };
-
-MyServerCallbacks serverCallbacks;
-MyCharacteristicCallbacks charCallbacks;
 
 void setup() {
   M5.begin();
@@ -167,7 +116,7 @@ void setup() {
 
   Serial.begin(115200);
   while (!Serial) delay(10);
-  Serial.println("Starting Battleship with simulated BLE...");
+  Serial.println("Starting Battleship with BLE...");
 
   // Initialize Seesaw Gamepad
   if (!ss.begin(SEESAW_ADDR)) {
@@ -177,18 +126,30 @@ void setup() {
   ss.pinModeBulk(button_mask, INPUT_PULLUP);
   ss.setGPIOInterrupts(button_mask, 1);
 
-  // Simulated BLE initialization
+  // Initialize BLE
+  BLEDevice::init(isPlayer1 ? "M5Core2_Player1" : "M5Core2_Player2");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
   pService = pServer->createService(SERVICE_UUID);
-  pCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID, 0);
-  Serial.println("Simulated BLE initialized. Simulating connection...");
+  pCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID,
+                      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
+                    );
+  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+  pService->start();
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->start();
+  Serial.println("BLE initialized. Waiting for connection...");
 
-  // Simulate connection after a delay
-  M5.Lcd.fillScreen(BLACK);
-  M5.Lcd.setTextColor(BLUE);
-  M5.Lcd.setCursor(10, M5.Lcd.height() / 2 - 8);
-  M5.Lcd.print("Simulating connection...");
-  delay(2000); // Pretend to wait for connection
-  serverCallbacks.onConnect();
+  // Wait for connection
+  while (!deviceConnected) {
+    M5.Lcd.fillScreen(BLACK);
+    M5.Lcd.setTextColor(BLUE);
+    M5.Lcd.setCursor(10, M5.Lcd.height() / 2 - 8);
+    M5.Lcd.print("Waiting for opponent...");
+    delay(100);
+  }
 
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setTextColor(GREEN);
@@ -201,26 +162,11 @@ void setup() {
     for (int j = 0; j < GRID_SIZE; j++) {
       grid[i][j] = ' ';
       hiddenGrid[i][j] = ' ';
-      opponentGrid[i][j] = ' '; // Initialize opponent's grid
     }
   }
 
-  // Place opponent's ships in simulated grid
-  for (int s = 0; s < NUM_SHIPS; s++) {
-    Ship ship = opponentShips[s];
-    for (int i = 0; i < ship.length; i++) {
-      if (ship.horizontal) opponentGrid[ship.y][ship.x + i] = 'S';
-      else opponentGrid[ship.y + i][ship.x] = 'S';
-    }
-  }
-
-  // Move to ship placement
   placeShipsScreen();
-
-  // Wait for both players to be ready
   waitForOpponentScreen();
-
-  // Start main game
   drawInitialGrid();
   updateCursor();
 }
@@ -277,7 +223,6 @@ void loop() {
   }
 }
 
-// Draw the initial grid
 void drawInitialGrid() {
   M5.Lcd.fillScreen(BLACK);
   for (int i = 0; i < GRID_SIZE; i++) {
@@ -298,7 +243,6 @@ void drawInitialGrid() {
   gridDrawn = true;
 }
 
-// Update a single cell
 void updateCell(int x, int y) {
   int pixelX = x * CELL_SIZE;
   int pixelY = y * CELL_SIZE;
@@ -321,7 +265,6 @@ void updateCell(int x, int y) {
   }
 }
 
-// Update cursor position
 void updateCursor() {
   if (lastCursorX >= 0 && lastCursorY >= 0) {
     int oldX = lastCursorX * CELL_SIZE;
@@ -336,7 +279,6 @@ void updateCursor() {
   lastCursorY = cursorY;
 }
 
-// Check if a ship can be placed
 bool canPlaceShip(int x, int y, int len, int dir) {
   if (dir == 0) {
     if (x + len > GRID_SIZE) return false;
@@ -352,7 +294,6 @@ bool canPlaceShip(int x, int y, int len, int dir) {
   return true;
 }
 
-// Check if a coordinate hits a local ship
 char checkHit(int x, int y) {
   for (int i = 0; i < NUM_SHIPS; i++) {
     Ship ship = placedShips[i];
@@ -369,18 +310,10 @@ char checkHit(int x, int y) {
   return 'O';
 }
 
-// Check if a coordinate hits an opponent's ship (simulated)
-char checkOpponentHit(int x, int y) {
-  if (opponentGrid[y][x] == 'S') return 'X';
-  return 'O';
-}
-
 void sendMove(int x, int y, char result) {
   String guessData = "GUESS:" + String(x) + "," + String(y);
   pCharacteristic->setValue(guessData.c_str());
   pCharacteristic->notify();
-  // Immediately simulate opponent's response
-  charCallbacks.onWrite(pCharacteristic);
 }
 
 void placeShipsScreen() {
@@ -492,11 +425,8 @@ void placeShipsScreen() {
   if (deviceConnected) {
     pCharacteristic->setValue("READY");
     pCharacteristic->notify();
+    Serial.println("Sent READY to opponent");
     localReady = true;
-    Serial.println("Sent READY to simulated opponent");
-    // Simulate opponent READY after a delay
-    delay(2000); // Pretend opponent takes 2 seconds to place ships
-    charCallbacks.onWrite(pCharacteristic); // Trigger READY callback
   }
 }
 
