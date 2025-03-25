@@ -8,8 +8,8 @@
 - [x] Move Cursor Around
 - [x] Place Shots w/ Gamepad **or Touch Screen**
 - [x] Communicate Shot over BLE to other device (untested)
-- [ ] Wait for reponse turn
-- [ ] FIX: p1 can't place shots during game (green x's)
+- [x] Wait for reponse turn
+- [ ] FIX: p1 can't place shots during game (yellow x's)
 
 ## End
-- [ ] Win / Loss
+- [x] Win / Loss

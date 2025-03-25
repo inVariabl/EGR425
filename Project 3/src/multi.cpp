@@ -17,9 +17,10 @@ BLECharacteristic *pCharacteristic; // Server-side for P1
 BLEClient *pClient;                 // Client-side for P2
 BLERemoteCharacteristic *pRemoteCharacteristic; // Client-side for P2
 bool deviceConnected = false;
-bool isPlayer1 = true; // Set to false for Player 2
+bool isPlayer1 = false; // Set to false for Player 2
 bool opponentReady = false;
 bool localReady = false;
+bool myTurn = false;    // Turn tracking: true for current player’s turn
 
 // Seesaw Gamepad setup
 Adafruit_seesaw ss;
@@ -69,6 +70,7 @@ void placeShipsScreen();
 void waitForOpponentScreen();
 char checkHit(int x, int y);
 void drawScreenTextWithBackground(String text, int backgroundColor);
+void updateTurnDisplay();
 
 // BLE Server Callbacks (P1)
 class MyServerCallbacks : public BLEServerCallbacks {
@@ -76,6 +78,7 @@ class MyServerCallbacks : public BLEServerCallbacks {
     deviceConnected = true;
     Serial.println("BLE: Device connected successfully");
     drawScreenTextWithBackground("Connected!", TFT_GREEN);
+    myTurn = true; // P1 starts
   }
 
   void onDisconnect(BLEServer* pServer) {
@@ -83,7 +86,7 @@ class MyServerCallbacks : public BLEServerCallbacks {
     opponentReady = false;
     localReady = false;
     Serial.println("BLE: Device disconnected");
-    pServer->startAdvertising(); // Restart advertising
+    pServer->startAdvertising();
     Serial.println("BLE: Restarted advertising");
     drawScreenTextWithBackground("Disconnected! Waiting...", TFT_RED);
   }
@@ -105,6 +108,8 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
       pCharacteristic->setValue(response.c_str());
       pCharacteristic->notify();
       Serial.println("BLE: Received guess: " + String(x) + "," + String(y) + " Result: " + (result == 'X' ? 'H' : 'O'));
+      myTurn = true; // P1’s turn after P2 shoots
+      updateTurnDisplay();
     } else if (value.length() >= 5) {
       int x = value[0] - '0';
       int y = value[2] - '0';
@@ -127,6 +132,7 @@ class MyClientCallbacks : public BLEClientCallbacks {
     deviceConnected = true;
     Serial.println("BLE: Connected to server");
     drawScreenTextWithBackground("Connected!", TFT_GREEN);
+    myTurn = false; // P2 waits for P1’s first move
   }
 
   void onDisconnect(BLEClient* pClient) {
@@ -138,7 +144,7 @@ class MyClientCallbacks : public BLEClientCallbacks {
   }
 };
 
-// Notification Callback for P2 (static function)
+// Notification Callback for P2
 static void notifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
   String value = String((char*)pData, length);
   if (value == "READY") {
@@ -156,6 +162,8 @@ static void notifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic, ui
     updateCell(x, y);
     Serial.print("BLE: Shot confirmed at: ("); Serial.print(x); Serial.print(", "); Serial.print(y);
     Serial.print(") - "); Serial.println(result == 'H' ? "Hit" : "Miss");
+    myTurn = true; // P2’s turn after P1 shoots
+    updateTurnDisplay();
   }
 }
 
@@ -187,7 +195,7 @@ void setup() {
                         BLECharacteristic::PROPERTY_WRITE |
                         BLECharacteristic::PROPERTY_NOTIFY
                       );
-    pCharacteristic->addDescriptor(new BLE2902()); // Enable notifications
+    pCharacteristic->addDescriptor(new BLE2902());
     pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
     pCharacteristic->setValue("Ready");
     pService->start();
@@ -223,11 +231,9 @@ void setup() {
         BLERemoteService* pRemoteService = pClient->getService(SERVICE_UUID);
         if (pRemoteService) {
           pRemoteCharacteristic = pRemoteService->getCharacteristic(CHARACTERISTIC_UUID);
-          if (pRemoteCharacteristic) {
-            if (pRemoteCharacteristic->canNotify()) {
-              pRemoteCharacteristic->registerForNotify(notifyCallback);
-              Serial.println("BLE: Registered for notifications");
-            }
+          if (pRemoteCharacteristic && pRemoteCharacteristic->canNotify()) {
+            pRemoteCharacteristic->registerForNotify(notifyCallback);
+            Serial.println("BLE: Registered for notifications");
           }
         }
       } else {
@@ -259,6 +265,7 @@ void setup() {
   waitForOpponentScreen();
   drawInitialGrid();
   updateCursor();
+  updateTurnDisplay();
 }
 
 void loop() {
@@ -285,13 +292,15 @@ void loop() {
           pRemoteCharacteristic->registerForNotify(notifyCallback);
           Serial.println("BLE: Reconnected and registered for notifications");
           deviceConnected = true;
+          myTurn = false; // P2 waits after reconnect
+          updateTurnDisplay();
         }
       }
       delete targetDevice;
     }
   }
 
-  if (!gameOver && deviceConnected && opponentReady && localReady) {
+  if (!gameOver && deviceConnected && opponentReady && localReady && myTurn) {
     int16_t joyX = 1023 - ss.analogRead(JOYSTICK_X_PIN);
     int16_t joyY = 1023 - ss.analogRead(JOYSTICK_Y_PIN);
     uint32_t buttons = ss.digitalReadBulk(button_mask);
@@ -327,10 +336,12 @@ void loop() {
     static bool lastButtonA = false;
     if ((buttonA && !lastButtonA) || (!isTouching && wasTouching)) {
       if (grid[cursorY][cursorX] == ' ') {
-        grid[cursorY][cursorX] = 'X';
-        updateCell(cursorX, cursorY);
+        grid[cursorY][cursorX] = 'X'; // Mark shot temporarily
+        updateCell(cursorX, cursorY); // Show yellow X immediately
         sendMove(cursorX, cursorY, 'X');
         Serial.print("BLE: Shot sent at: ("); Serial.print(cursorX); Serial.print(", "); Serial.print(cursorY); Serial.println(")");
+        myTurn = false; // Switch turn after shooting
+        updateTurnDisplay();
       }
     }
     lastButtonA = buttonA;
@@ -346,12 +357,12 @@ void drawInitialGrid() {
       int y = i * CELL_SIZE;
       M5.Lcd.drawRect(x, y, CELL_SIZE, CELL_SIZE, WHITE);
       if (grid[i][j] == 'X') {
-        M5.Lcd.drawLine(x + 5, y + 5, x + CELL_SIZE - 5, y + CELL_SIZE - 5, GREEN);
-        M5.Lcd.drawLine(x + CELL_SIZE - 5, y + 5, x + 5, y + CELL_SIZE - 5, GREEN);
-      } else if (grid[i][j] == 'O') {
-        M5.Lcd.fillCircle(x + CELL_SIZE / 2, y + CELL_SIZE / 2, CELL_SIZE / 4, WHITE);
+        M5.Lcd.drawLine(x + 5, y + 5, x + CELL_SIZE - 5, y + CELL_SIZE - 5, YELLOW);
+        M5.Lcd.drawLine(x + CELL_SIZE - 5, y + 5, x + 5, y + CELL_SIZE - 5, YELLOW);
       } else if (grid[i][j] == 'H') {
         M5.Lcd.fillRect(x + 5, y + 5, CELL_SIZE - 10, CELL_SIZE - 10, RED);
+      } else if (grid[i][j] == 'O') {
+        M5.Lcd.fillCircle(x + CELL_SIZE / 2, y + CELL_SIZE / 2, CELL_SIZE / 4, WHITE);
       }
     }
   }
@@ -365,19 +376,16 @@ void updateCell(int x, int y) {
   M5.Lcd.drawRect(pixelX, pixelY, CELL_SIZE, CELL_SIZE, WHITE);
 
   if (grid[y][x] == 'X') {
-    M5.Lcd.drawLine(pixelX + 5, pixelY + 5, pixelX + CELL_SIZE - 5, pixelY + CELL_SIZE - 5, GREEN);
-    M5.Lcd.drawLine(pixelX + CELL_SIZE - 5, pixelY + 5, pixelX + 5, pixelY + CELL_SIZE - 5, GREEN);
-  } else if (grid[y][x] == 'O') {
-    M5.Lcd.fillCircle(pixelX + CELL_SIZE / 2, pixelY + CELL_SIZE / 2, CELL_SIZE / 4, WHITE);
+    M5.Lcd.drawLine(pixelX + 5, pixelY + 5, pixelX + CELL_SIZE - 5, pixelY + CELL_SIZE - 5, YELLOW);
+    M5.Lcd.drawLine(pixelX + CELL_SIZE - 5, pixelY + 5, pixelX + 5, pixelY + CELL_SIZE - 5, YELLOW);
   } else if (grid[y][x] == 'H') {
     M5.Lcd.fillRect(pixelX + 5, pixelY + 5, CELL_SIZE - 10, CELL_SIZE - 10, RED);
+  } else if (grid[y][x] == 'O') {
+    M5.Lcd.fillCircle(pixelX + CELL_SIZE / 2, pixelY + CELL_SIZE / 2, CELL_SIZE / 4, WHITE);
   }
 
   if (gameOver) {
-    M5.Lcd.setTextSize(2);
-    M5.Lcd.setCursor(10, GRID_SIZE * CELL_SIZE + 10);
-    M5.Lcd.setTextColor(GREEN);
-    M5.Lcd.print(isPlayer1 ? "You Win!" : "You Lose!");
+    updateTurnDisplay(); // Ensure only "You Win!" or "You Lose!" is shown
   }
 }
 
@@ -554,4 +562,23 @@ void drawScreenTextWithBackground(String text, int backgroundColor) {
   M5.Lcd.fillScreen(backgroundColor);
   M5.Lcd.setCursor(10, M5.Lcd.height() / 2 - 8);
   M5.Lcd.println(text);
+}
+
+void updateTurnDisplay() {
+  M5.Lcd.fillRect(0, GRID_SIZE * CELL_SIZE, M5.Lcd.width(), M5.Lcd.height() - GRID_SIZE * CELL_SIZE, BLACK);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setCursor(10, GRID_SIZE * CELL_SIZE + 10);
+
+  if (gameOver) {
+    M5.Lcd.setTextColor(GREEN);
+    M5.Lcd.print(isPlayer1 ? "You Lose!" : "You Win!"); // Fixed: P2 (isPlayer1 = false) wins, P1 loses
+  } else {
+    if (myTurn) {
+      M5.Lcd.setTextColor(GREEN);
+      M5.Lcd.print("Your Turn!");
+    } else {
+      M5.Lcd.setTextColor(YELLOW);
+      M5.Lcd.print("His Turn");
+    }
+  }
 }
