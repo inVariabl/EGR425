@@ -1,14 +1,21 @@
 #include <M5Unified.h>
-#include <NimBLEDevice.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 #include "Adafruit_seesaw.h"
 
 // BLE Setup
-#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define SERVICE_UUID "60d3a4dc-1951-4791-8c42-198c2180cf2b"
+#define CHARACTERISTIC_UUID "734d991d-ce8a-42c9-a83d-2508cf2940e1"
+static String BLE_BROADCAST_NAME = "Dustie's M5 Server"; // P1’s name
+static String BLE_CLIENT_NAME = "Dustie's M5 Client";   // P2’s name
 
 BLEServer *pServer;
 BLEService *pService;
-BLECharacteristic *pCharacteristic;
+BLECharacteristic *pCharacteristic; // Server-side for P1
+BLEClient *pClient;                 // Client-side for P2
+BLERemoteCharacteristic *pRemoteCharacteristic; // Client-side for P2
 bool deviceConnected = false;
 bool isPlayer1 = true; // Set to false for Player 2
 bool opponentReady = false;
@@ -20,7 +27,7 @@ Adafruit_seesaw ss;
 #define JOYSTICK_X_PIN 14
 #define JOYSTICK_Y_PIN 15
 #define BUTTON_A_PIN 5
-#define BUTTON_B_PIN 6  // Pin 6 = Button X
+#define BUTTON_B_PIN 6
 uint32_t button_mask = (1UL << BUTTON_A_PIN) | (1UL << BUTTON_B_PIN);
 
 // Grid settings
@@ -61,12 +68,14 @@ void sendMove(int x, int y, char result);
 void placeShipsScreen();
 void waitForOpponentScreen();
 char checkHit(int x, int y);
+void drawScreenTextWithBackground(String text, int backgroundColor);
 
-// BLE Server Callbacks
+// BLE Server Callbacks (P1)
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
     deviceConnected = true;
     Serial.println("BLE: Device connected successfully");
+    drawScreenTextWithBackground("Connected!", TFT_GREEN);
   }
 
   void onDisconnect(BLEServer* pServer) {
@@ -74,11 +83,13 @@ class MyServerCallbacks : public BLEServerCallbacks {
     opponentReady = false;
     localReady = false;
     Serial.println("BLE: Device disconnected");
-    pServer->startAdvertising();
-    Serial.println("BLE: Restarted advertising after disconnect");
+    pServer->startAdvertising(); // Restart advertising
+    Serial.println("BLE: Restarted advertising");
+    drawScreenTextWithBackground("Disconnected! Waiting...", TFT_RED);
   }
 };
 
+// BLE Characteristic Callbacks (P1)
 class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* pCharacteristic) {
     std::string value = pCharacteristic->getValue();
@@ -94,7 +105,7 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
       pCharacteristic->setValue(response.c_str());
       pCharacteristic->notify();
       Serial.println("BLE: Received guess: " + String(x) + "," + String(y) + " Result: " + (result == 'X' ? 'H' : 'O'));
-    } else {
+    } else if (value.length() >= 5) {
       int x = value[0] - '0';
       int y = value[2] - '0';
       char result = value[4];
@@ -110,14 +121,49 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
-void setup() {
-  M5.begin();
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.fillScreen(BLACK);
+// BLE Client Callbacks (P2)
+class MyClientCallbacks : public BLEClientCallbacks {
+  void onConnect(BLEClient* pClient) {
+    deviceConnected = true;
+    Serial.println("BLE: Connected to server");
+    drawScreenTextWithBackground("Connected!", TFT_GREEN);
+  }
 
+  void onDisconnect(BLEClient* pClient) {
+    deviceConnected = false;
+    opponentReady = false;
+    localReady = false;
+    Serial.println("BLE: Disconnected from server");
+    drawScreenTextWithBackground("Disconnected! Reconnecting...", TFT_RED);
+  }
+};
+
+// Notification Callback for P2 (static function)
+static void notifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
+  String value = String((char*)pData, length);
+  if (value == "READY") {
+    opponentReady = true;
+    Serial.println("BLE: Received READY from server");
+  } else if (value.length() >= 5) {
+    int x = value[0] - '0';
+    int y = value[2] - '0';
+    char result = value[4];
+    grid[y][x] = result;
+    if (result == 'H') {
+      hits++;
+      if (hits == totalHitsNeeded) gameOver = true;
+    }
+    updateCell(x, y);
+    Serial.print("BLE: Shot confirmed at: ("); Serial.print(x); Serial.print(", "); Serial.print(y);
+    Serial.print(") - "); Serial.println(result == 'H' ? "Hit" : "Miss");
+  }
+}
+
+void setup() {
+  auto cfg = M5.config();
+  M5.begin(cfg);
   Serial.begin(115200);
-  while (!Serial) delay(10);
-  Serial.println("Starting Battleship with BLE...");
+  M5.Lcd.setTextSize(2);
 
   // Initialize Seesaw Gamepad
   if (!ss.begin(SEESAW_ADDR)) {
@@ -128,52 +174,78 @@ void setup() {
   ss.setGPIOInterrupts(button_mask, 1);
   Serial.println("Seesaw Gamepad initialized");
 
-  // Initialize BLE with debug
-  Serial.println("BLE: Initializing device...");
-  BLEDevice::init(isPlayer1 ? "M5Core2_Player1" : "M5Core2_Player2");
-  Serial.println("BLE: Device initialized as " + String(isPlayer1 ? "M5Core2_Player1" : "M5Core2_Player2"));
+  if (isPlayer1) {
+    // Player 1: Server Setup
+    Serial.println("BLE: Initializing as server...");
+    BLEDevice::init(BLE_BROADCAST_NAME.c_str());
+    pServer = BLEDevice::createServer();
+    pServer->setCallbacks(new MyServerCallbacks());
+    pService = pServer->createService(SERVICE_UUID);
+    pCharacteristic = pService->createCharacteristic(
+                        CHARACTERISTIC_UUID,
+                        BLECharacteristic::PROPERTY_READ |
+                        BLECharacteristic::PROPERTY_WRITE |
+                        BLECharacteristic::PROPERTY_NOTIFY
+                      );
+    pCharacteristic->addDescriptor(new BLE2902()); // Enable notifications
+    pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+    pCharacteristic->setValue("Ready");
+    pService->start();
+    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(SERVICE_UUID);
+    pAdvertising->setScanResponse(true);
+    pAdvertising->setMinPreferred(0x06);
+    BLEDevice::startAdvertising();
+    Serial.println("BLE: Broadcasting as " + BLE_BROADCAST_NAME);
+    drawScreenTextWithBackground("Broadcasting as:\n" + BLE_BROADCAST_NAME, TFT_BLUE);
+  } else {
+    // Player 2: Client Setup
+    Serial.println("BLE: Initializing as client...");
+    BLEDevice::init(BLE_CLIENT_NAME.c_str());
+    pClient = BLEDevice::createClient();
+    pClient->setClientCallbacks(new MyClientCallbacks());
 
-  Serial.println("BLE: Creating server...");
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
-  Serial.println("BLE: Server created");
+    BLEScan* pScan = BLEDevice::getScan();
+    pScan->setActiveScan(true);
+    pScan->start(10, false);
+    BLEScanResults results = pScan->getResults();
+    BLEAdvertisedDevice* targetDevice = nullptr;
+    for (int i = 0; i < results.getCount(); i++) {
+      BLEAdvertisedDevice device = results.getDevice(i);
+      if (device.getName() == BLE_BROADCAST_NAME.c_str()) {
+        targetDevice = new BLEAdvertisedDevice(device);
+        break;
+      }
+    }
 
-  Serial.println("BLE: Creating service with UUID " + String(SERVICE_UUID));
-  pService = pServer->createService(SERVICE_UUID);
-
-  Serial.println("BLE: Creating characteristic with UUID " + String(CHARACTERISTIC_UUID));
-  pCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_UUID,
-                      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
-                    );
-  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
-  Serial.println("BLE: Characteristic created");
-
-  Serial.println("BLE: Starting service...");
-  pService->start();
-  Serial.println("BLE: Service started");
-
-  Serial.println("BLE: Starting advertising...");
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->start();
-  Serial.println("BLE: Advertising started. Waiting for connection...");
-
-  // Wait for connection with debug
-  while (!deviceConnected) {
-    M5.Lcd.fillScreen(BLACK);
-    M5.Lcd.setTextColor(BLUE);
-    M5.Lcd.setCursor(10, M5.Lcd.height() / 2 - 8);
-    M5.Lcd.print("Waiting for opponent...");
-    delay(100);
-    Serial.println("BLE: Still waiting for connection...");
+    if (targetDevice) {
+      if (pClient->connect(targetDevice)) {
+        BLERemoteService* pRemoteService = pClient->getService(SERVICE_UUID);
+        if (pRemoteService) {
+          pRemoteCharacteristic = pRemoteService->getCharacteristic(CHARACTERISTIC_UUID);
+          if (pRemoteCharacteristic) {
+            if (pRemoteCharacteristic->canNotify()) {
+              pRemoteCharacteristic->registerForNotify(notifyCallback);
+              Serial.println("BLE: Registered for notifications");
+            }
+          }
+        }
+      } else {
+        Serial.println("BLE: Failed to connect to server");
+      }
+      delete targetDevice;
+    } else {
+      Serial.println("BLE: Server not found");
+    }
   }
 
-  M5.Lcd.fillScreen(BLACK);
-  M5.Lcd.setTextColor(GREEN);
-  M5.Lcd.setCursor(10, M5.Lcd.height() / 2 - 8);
-  M5.Lcd.print("Connected!");
-  delay(2000);
+  // Wait for connection
+  while (!deviceConnected) {
+    drawScreenTextWithBackground("Waiting for opponent...", TFT_CYAN);
+    delay(100);
+  }
+
+  delay(2000); // Show "Connected!" briefly
 
   // Initialize grids
   for (int i = 0; i < GRID_SIZE; i++) {
@@ -192,6 +264,33 @@ void setup() {
 void loop() {
   M5.update();
 
+  // Reconnect logic for P2
+  if (!deviceConnected && !isPlayer1 && pClient) {
+    BLEScan* pScan = BLEDevice::getScan();
+    pScan->start(5, false);
+    BLEScanResults results = pScan->getResults();
+    BLEAdvertisedDevice* targetDevice = nullptr;
+    for (int i = 0; i < results.getCount(); i++) {
+      BLEAdvertisedDevice device = results.getDevice(i);
+      if (device.getName() == BLE_BROADCAST_NAME.c_str()) {
+        targetDevice = new BLEAdvertisedDevice(device);
+        break;
+      }
+    }
+    if (targetDevice && pClient->connect(targetDevice)) {
+      BLERemoteService* pRemoteService = pClient->getService(SERVICE_UUID);
+      if (pRemoteService) {
+        pRemoteCharacteristic = pRemoteService->getCharacteristic(CHARACTERISTIC_UUID);
+        if (pRemoteCharacteristic && pRemoteCharacteristic->canNotify()) {
+          pRemoteCharacteristic->registerForNotify(notifyCallback);
+          Serial.println("BLE: Reconnected and registered for notifications");
+          deviceConnected = true;
+        }
+      }
+      delete targetDevice;
+    }
+  }
+
   if (!gameOver && deviceConnected && opponentReady && localReady) {
     int16_t joyX = 1023 - ss.analogRead(JOYSTICK_X_PIN);
     int16_t joyY = 1023 - ss.analogRead(JOYSTICK_Y_PIN);
@@ -209,12 +308,11 @@ void loop() {
       cursorX = newCursorX;
       cursorY = newCursorY;
       updateCursor();
-      delay(150);
+      delay(150); // Debounce joystick
     }
 
     static bool wasTouching = false;
     bool isTouching = M5.Touch.getCount() > 0;
-
     if (isTouching) {
       auto touchPoint = M5.Touch.getDetail(0);
       int touchX = constrain(touchPoint.x / CELL_SIZE, 0, GRID_SIZE - 1);
@@ -232,8 +330,7 @@ void loop() {
         grid[cursorY][cursorX] = 'X';
         updateCell(cursorX, cursorY);
         sendMove(cursorX, cursorY, 'X');
-        Serial.print("Shot sent at: ("); Serial.print(cursorX); Serial.print(", "); Serial.print(cursorY); Serial.println(")");
-        delay(200);
+        Serial.print("BLE: Shot sent at: ("); Serial.print(cursorX); Serial.print(", "); Serial.print(cursorY); Serial.println(")");
       }
     }
     lastButtonA = buttonA;
@@ -277,6 +374,7 @@ void updateCell(int x, int y) {
   }
 
   if (gameOver) {
+    M5.Lcd.setTextSize(2);
     M5.Lcd.setCursor(10, GRID_SIZE * CELL_SIZE + 10);
     M5.Lcd.setTextColor(GREEN);
     M5.Lcd.print(isPlayer1 ? "You Win!" : "You Lose!");
@@ -316,13 +414,9 @@ char checkHit(int x, int y) {
   for (int i = 0; i < NUM_SHIPS; i++) {
     Ship ship = placedShips[i];
     if (ship.horizontal) {
-      if (y == ship.y && x >= ship.x && x < ship.x + ship.length) {
-        return 'X';
-      }
+      if (y == ship.y && x >= ship.x && x < ship.x + ship.length) return 'X';
     } else {
-      if (x == ship.x && y >= ship.y && y < ship.y + ship.length) {
-        return 'X';
-      }
+      if (x == ship.x && y >= ship.y && y < ship.y + ship.length) return 'X';
     }
   }
   return 'O';
@@ -330,8 +424,14 @@ char checkHit(int x, int y) {
 
 void sendMove(int x, int y, char result) {
   String guessData = "GUESS:" + String(x) + "," + String(y);
-  pCharacteristic->setValue(guessData.c_str());
-  pCharacteristic->notify();
+  if (isPlayer1 && pCharacteristic) {
+    pCharacteristic->setValue(guessData.c_str());
+    pCharacteristic->notify();
+    Serial.println("BLE: Sent guess: " + guessData);
+  } else if (pRemoteCharacteristic) {
+    pRemoteCharacteristic->writeValue(guessData.c_str());
+    Serial.println("BLE: Sent guess: " + guessData);
+  }
 }
 
 void placeShipsScreen() {
@@ -349,7 +449,7 @@ void placeShipsScreen() {
       for (int x = 0; x < GRID_SIZE; x++) {
         if (hiddenGrid[y][x] == 'S') {
           M5.Lcd.fillRect(x * CELL_SIZE + 5, y * CELL_SIZE + 5,
-                         CELL_SIZE - 10, CELL_SIZE - 10, RED);
+                          CELL_SIZE - 10, CELL_SIZE - 10, RED);
         }
       }
     }
@@ -357,7 +457,7 @@ void placeShipsScreen() {
     M5.Lcd.setTextSize(1);
     M5.Lcd.setTextColor(WHITE);
     M5.Lcd.setCursor(10, GRID_SIZE * CELL_SIZE + 10);
-    M5.Lcd.printf("Place ship %d (size %d) - A to confirm, X to rotate",
+    M5.Lcd.printf("Place ship %d (size %d) - A to confirm, B to rotate",
                   currentShip + 1, ships[currentShip]);
 
     bool canPlace = canPlaceShip(shipX, shipY, ships[currentShip], horizontal ? 0 : 1);
@@ -366,7 +466,7 @@ void placeShipsScreen() {
       int previewY = horizontal ? shipY : shipY + i;
       if (previewX < GRID_SIZE && previewY < GRID_SIZE && canPlace) {
         M5.Lcd.drawRect(previewX * CELL_SIZE, previewY * CELL_SIZE,
-                       CELL_SIZE, CELL_SIZE, YELLOW);
+                        CELL_SIZE, CELL_SIZE, YELLOW);
       }
     }
 
@@ -374,7 +474,7 @@ void placeShipsScreen() {
     int16_t joyY = 1023 - ss.analogRead(JOYSTICK_Y_PIN);
     uint32_t buttons = ss.digitalReadBulk(button_mask);
     bool buttonA = !(buttons & (1UL << BUTTON_A_PIN));
-    bool buttonX = !(buttons & (1UL << BUTTON_B_PIN));
+    bool buttonB = !(buttons & (1UL << BUTTON_B_PIN));
 
     int newShipX = shipX;
     int newShipY = shipY;
@@ -396,31 +496,20 @@ void placeShipsScreen() {
       drawInitialGrid();
     }
 
-    static bool lastButtonX = false;
-    if (buttonX && !lastButtonX) {
+    static bool lastButtonB = false;
+    if (buttonB && !lastButtonB) {
       horizontal = !horizontal;
-      if (horizontal && shipX + ships[currentShip] > GRID_SIZE) {
-        shipX = GRID_SIZE - ships[currentShip];
-      }
-      if (!horizontal && shipY + ships[currentShip] > GRID_SIZE) {
-        shipY = GRID_SIZE - ships[currentShip];
-      }
+      if (horizontal && shipX + ships[currentShip] > GRID_SIZE) shipX = GRID_SIZE - ships[currentShip];
+      if (!horizontal && shipY + ships[currentShip] > GRID_SIZE) shipY = GRID_SIZE - ships[currentShip];
       drawInitialGrid();
       delay(200);
     }
-    lastButtonX = buttonX;
+    lastButtonB = buttonB;
 
     if (buttonA && canPlaceShip(shipX, shipY, ships[currentShip], horizontal ? 0 : 1)) {
       for (int i = 0; i < ships[currentShip]; i++) {
-        if (horizontal) {
-          hiddenGrid[shipY][shipX + i] = 'S';
-          M5.Lcd.fillRect((shipX + i) * CELL_SIZE + 5, shipY * CELL_SIZE + 5,
-                         CELL_SIZE - 10, CELL_SIZE - 10, RED);
-        } else {
-          hiddenGrid[shipY + i][shipX] = 'S';
-          M5.Lcd.fillRect(shipX * CELL_SIZE + 5, (shipY + i) * CELL_SIZE + 5,
-                         CELL_SIZE - 10, CELL_SIZE - 10, RED);
-        }
+        if (horizontal) hiddenGrid[shipY][shipX + i] = 'S';
+        else hiddenGrid[shipY + i][shipX] = 'S';
       }
       placedShips[currentShip].x = shipX;
       placedShips[currentShip].y = shipY;
@@ -441,30 +530,28 @@ void placeShipsScreen() {
   M5.Lcd.fillRect(0, GRID_SIZE * CELL_SIZE, M5.Lcd.width(), M5.Lcd.height() - GRID_SIZE * CELL_SIZE, BLACK);
 
   if (deviceConnected) {
-    pCharacteristic->setValue("READY");
-    pCharacteristic->notify();
-    Serial.println("Sent READY to opponent");
+    if (isPlayer1 && pCharacteristic) {
+      pCharacteristic->setValue("READY");
+      pCharacteristic->notify();
+      Serial.println("BLE: Sent READY to opponent");
+    } else if (pRemoteCharacteristic) {
+      pRemoteCharacteristic->writeValue("READY");
+      Serial.println("BLE: Sent READY to opponent");
+    }
     localReady = true;
   }
 }
 
 void waitForOpponentScreen() {
-  M5.Lcd.fillScreen(BLACK);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setTextColor(WHITE);
-
-  const char* waitingText = "Waiting for opponent...";
-  int textWidth = strlen(waitingText) * 12;
-  int textHeight = 16;
-  int x = (M5.Lcd.width() - textWidth) / 2;
-  int y = (M5.Lcd.height() - textHeight) / 2;
-
-  M5.Lcd.setCursor(x, y);
-  M5.Lcd.print(waitingText);
-
+  drawScreenTextWithBackground("Waiting for opponent...", TFT_CYAN);
   while (!(localReady && opponentReady)) {
     delay(100);
   }
-
   M5.Lcd.fillScreen(BLACK);
+}
+
+void drawScreenTextWithBackground(String text, int backgroundColor) {
+  M5.Lcd.fillScreen(backgroundColor);
+  M5.Lcd.setCursor(10, M5.Lcd.height() / 2 - 8);
+  M5.Lcd.println(text);
 }
